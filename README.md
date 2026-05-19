@@ -264,7 +264,46 @@ local code, msg = cambrian_ping()
 local major, minor, patch = cambrian_get_version()
 ```
 
-### 7.2 Model Management
+### 7.2 Sending Raw Commands (Without a Wrapper)
+
+Not every Cambrian API command has a dedicated wrapper function. For commands not covered by the library, use `cambrian_request` directly.
+
+> **Why can't I call `_cmd("PING#")` directly?**  
+> `_cmd` is declared `local function` inside the library file. In Lua, `local` is file-scoped — `require()` does not expose local symbols to the caller. Calling `_cmd` from a user script always results in `attempt to call a nil value (global '_cmd')`.
+
+**Pattern — open socket, send command, close socket:**
+
+```lua
+local sock, ok = cambrian_connect("192.168.58.200", 4000)
+if ok then
+    local code, msg, dat = cambrian_request(sock, "PING#")
+    cambrian_disconnect(sock)
+    popup({code, msg, dat}, "result")
+end
+```
+
+> **Common mistake:** calling `cambrian_request(sock, ...)` without `cambrian_connect` first leaves `sock = nil`, causing:  
+> `500 Error: bad argument #2 to 'SocketSendString' (string expected, got nil)`
+
+**Using wrapper functions is shorter and handles the socket automatically:**
+
+```lua
+-- These two are exactly equivalent:
+
+-- Option A: wrapper (recommended)
+local code, msg = cambrian_ping()
+
+-- Option B: manual
+local sock, ok = cambrian_connect(cambrian_ipname, cambrian_port)
+local code, msg = cambrian_request(sock, "PING#")
+cambrian_disconnect(sock)
+```
+
+Use Option B only when a wrapper doesn't exist for the command you need.
+
+---
+
+### 7.3 Model Management
 
 ```lua
 -- Load model (async — returns immediately, no response from server)
@@ -283,7 +322,7 @@ cambrian_unload_all_models()
 
 > **Important:** `cambrian_load_model` is a fire-and-forget command — the Cambrian server sends no response. Always follow it with `cambrian_wait_for_model_launch` before requesting predictions.
 
-### 7.3 Grasp Prediction
+### 7.4 Grasp Prediction
 
 ```lua
 -- Get the single best grasp prediction
@@ -318,7 +357,7 @@ for i = 1, count do
 end
 ```
 
-### 7.4 Approach Pose Calculation
+### 7.5 Approach Pose Calculation
 
 ```lua
 -- Calculate grasp, approach, pre-approach, and exit poses from a prediction
@@ -336,7 +375,7 @@ Go(app_p.coordinate,    nil, 20)
 Go(exit_p.coordinate,   nil, 20)
 ```
 
-### 7.5 Motion
+### 7.6 Motion
 
 ```lua
 -- Linear move (MoveL) to Cartesian pose
@@ -350,7 +389,7 @@ Go({x, y, z, rx, ry, rz}, tool, speed)
 Move("point_name", speed)
 ```
 
-### 7.6 Coordinate Transform
+### 7.7 Coordinate Transform
 
 ```lua
 -- Transform relative_pose (expressed in coordinate_pose frame) to world coordinates
@@ -361,7 +400,7 @@ local world_pose = cambrian_pose_trans(coordinate_pose, relative_pose)
 local target = cambrian_pose_trans(flange_pose, {0, 0, 50, 0, 0, 0})
 ```
 
-### 7.7 Camera Commands
+### 7.8 Camera Commands
 
 ```lua
 cambrian_check_cameras()        -- 1=OK, 0=error
@@ -373,7 +412,7 @@ cambrian_wait_cameras()         -- block until cameras ready
 cambrian_restart_cameras()
 ```
 
-### 7.8 TCP Offset
+### 7.9 TCP Offset
 
 The library reads the active tool's TCP offset automatically via `GetTCPOffset()`. Manual override is available when the camera is mounted separately from the TCP:
 
@@ -384,7 +423,7 @@ cambrian_set_state(nil, nil, {x, y, z, rx, ry, rz})
 -- Revert to automatic reading: set _fr_tool_offset_manual = false
 ```
 
-### 7.9 Calibration
+### 7.10 Calibration
 
 Calibration must be run once before the first prediction to establish the relationship between the camera rig and the robot flange.
 
@@ -453,7 +492,7 @@ end
 | `cambrian_set_calibration_rig_pose(pose, fl, sep, tilt)` | Set rig params without starting |
 | `cambrian_set_calibration_mount(space)` | `"BASE"` fixed / `"FLANGE"` robot-mounted |
 
-### 7.10 Popup
+### 7.11 Popup
 
 ```lua
 -- Show a blocking popup on the host PC
