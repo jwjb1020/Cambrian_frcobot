@@ -894,23 +894,27 @@ end
 -- stereo_separation: stereo separation in meters (optional; standard = 0.08)
 -- camera_tilt: camera tilt in degrees (optional; standard = 5)
 function cambrian_set_calibration_rig_pose(rig_pose, focal_length, stereo_separation, camera_tilt)
+    rig_pose          = rig_pose         or {0,0,0,0,0,0}
+    focal_length      = focal_length     or 8
+    stereo_separation = stereo_separation or 0.08
+    camera_tilt       = camera_tilt      or 5
     local req = "SET CALIBRATION RIG POSE#" .. _pose_str(rig_pose) .. "*" .. tostring(focal_length)
-    if stereo_separation ~= nil then
-        req = req .. "*" .. tostring(stereo_separation) .. "*" .. tostring(camera_tilt or 0)
-    end
+              .. "*" .. tostring(stereo_separation) .. "*" .. tostring(camera_tilt)
     _cmd(req)
 end
 
 -- Initiate a new calibration (both automatic and manual).
 -- For automatic calibration: rig_pose should be a rough approximation of rig pose relative to flange.
 -- For manual calibration: rig_pose can be {0,0,0,0,0,0}.
--- Standard rig:  focal_length=8, stereo_separation=0.08, camera_tilt=5
--- Small rig:     focal_length=8, stereo_separation=0.06, camera_tilt=8
+-- Defaults (standard rig): rig_pose={0,0,0,0,0,0}, focal_length=8, stereo_separation=0.08, camera_tilt=5
+-- Small rig:                focal_length=8, stereo_separation=0.06, camera_tilt=8
 function cambrian_start_calibration(rig_pose, focal_length, stereo_separation, camera_tilt)
+    rig_pose          = rig_pose         or {0,0,0,0,0,0}
+    focal_length      = focal_length     or 8
+    stereo_separation = stereo_separation or 0.08
+    camera_tilt       = camera_tilt      or 5
     local req = "START CALIBRATION#" .. _pose_str(rig_pose) .. "*" .. tostring(focal_length)
-    if stereo_separation ~= nil then
-        req = req .. "*" .. tostring(stereo_separation) .. "*" .. tostring(camera_tilt or 0)
-    end
+              .. "*" .. tostring(stereo_separation) .. "*" .. tostring(camera_tilt)
     _cmd(req)
 end
 
