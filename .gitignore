@@ -1,0 +1,11 @@
+# Runtime popup logs (generated automatically)
+log messages/
+
+# Fairino Docker image files (too large for git — share separately)
+*.tar
+*.tar.gz
+*.tgz
+
+# OS
+.DS_Store
+Thumbs.db
