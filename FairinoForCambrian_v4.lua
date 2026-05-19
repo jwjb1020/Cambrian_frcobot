@@ -1,10 +1,20 @@
 -- ====================================== --
 -- Cambrian Vision API
 -- (FAIRINO Edition)
--- Version  0.3.2
--- Release  2026/05/18
+-- Version  0.4.0
+-- Release  2026/05/19
 -- Based on v0.1.2 by Digital Media Professionals Inc.
 -- Modified for Fairino Robot by Jo Won Jun, Cambrian Robotics Korea
+-- ====================================== --
+--
+-- What's new in v0.4.0:
+--   • Calibration commands: cambrian_start_calibration, cambrian_next_calibration_step,
+--     cambrian_capture_calibration_image, cambrian_set_calibration_rig_pose,
+--     cambrian_set_calibration_mount, cambrian_run_manual_calibration
+--   • cambrian_run_auto_calibration() — high-level automatic calibration loop helper
+--   • Fixed set_tcp(): type guard condition was inverted (type ~= vs ==)
+--   • _n() safe-number helper is now module-level (was nested in get_current_robot_info)
+--   • cambrian_ping() now returns (code, msg) for connection status checking
 -- ====================================== --
 
 -- ********* Global Parameters *********
@@ -156,10 +166,9 @@ end
 -- Note: SetToolCoord parameter order should be validated on the actual robot
 function set_tcp(pose)
     local slot = GetActualTCPNum()
-    if type(slot) ~= "number" then
+    if type(slot) == "number" then
         SetToolCoord(slot, pose[1],pose[2],pose[3],pose[4],pose[5],pose[6], 0, 0, slot, 0)
     end
-
 end
 
 -- ======================================
@@ -282,6 +291,13 @@ function cambrian_set_state(flange_pose, joint_angles, tool_offset)
     end
 end
 
+-- (internal) Safe number conversion: returns v if it is a number, else tonumber(v) or 0
+-- Needed because GetTCPOffset() can return function values on some Fairino firmware builds;
+-- Lua's 'v or 0' does not catch truthy non-numbers (functions are truthy).
+local function _n(v)
+    return type(v) == "number" and v or (tonumber(v) or 0)
+end
+
 -- Read current robot state: flange pose, joint angles, TCP offset
 -- Called automatically on each Cambrian request (no need to call directly)
 function get_current_robot_info()
@@ -304,7 +320,6 @@ function get_current_robot_info()
     end
 
     local _t = {GetTCPOffset()}
-    local function _n(v) return type(v) == "number" and v or (tonumber(v) or 0) end
     local tcp_off = {_n(_t[1]), _n(_t[2]), _n(_t[3]), _n(_t[4]), _n(_t[5]), _n(_t[6])}
 
     local tool_offset = _fr_tool_offset_manual and _fr_tool_offset or tcp_off
@@ -722,7 +737,7 @@ function cambrian_set_model_recenter_crop(model_name, recenter_crop)
     _cmd("SET MODEL RECENTER CROP#" .. model_name .. "*" .. tostring(recenter_crop))
 end
 
--- Set edge trim region to exclude from images (pixels)
+-- Set edge trim region to exclude from images (0.0–0.4; 0.1 = trim 10% from each side)
 function cambrian_set_edge_trim(model_name, edge_trim)
     _cmd("SET EDGE TRIM#" .. model_name .. "*" .. tostring(edge_trim))
 end
@@ -741,7 +756,7 @@ function cambrian_get_grasp_count()
     return -1
 end
 
--- Get current detected part count
+-- Get current detected part count (Full Pose models only)
 function cambrian_get_part_count()
     local code, msg, dat = _cmd("GET PART COUNT#")
     if code == 0 then
@@ -751,7 +766,7 @@ function cambrian_get_part_count()
     return -1
 end
 
--- Check if parts are too close (1 = too close)
+-- Check if parts are too close to the camera (1 = too close)
 function cambrian_get_too_close()
     local code, msg, dat = _cmd("TOO CLOSE#")
     if code == 0 then
@@ -761,7 +776,7 @@ function cambrian_get_too_close()
     return -1
 end
 
--- Check if parts are too far (1 = too far)
+-- Check if parts are too far from the camera (1 = too far)
 function cambrian_get_too_far()
     local code, msg, dat = _cmd("TOO FAR#")
     if code == 0 then
@@ -775,7 +790,9 @@ end
 -- Prediction Averaging
 -- ======================================
 
--- Start collecting prediction average. threshold: number of predictions to collect, space: "BASE" or "FLANGE" (optional)
+-- Start collecting prediction average
+-- threshold: max distance (mm) for a prediction to be included
+-- space: "BASE" (world-stationary parts) or "FLANGE" (flange-stationary parts), optional
 function cambrian_start_prediction_average(threshold, space)
     local req = "START PREDICTION AVERAGE#" .. tostring(threshold or 10)
     if space ~= nil then
@@ -804,9 +821,10 @@ end
 -- System Commands
 -- ======================================
 
--- Check server connection (ping)
+-- Check server connection (ping). Returns: (code, msg) — code=0 means OK
 function cambrian_ping()
-    _cmd("PING#")
+    local code, msg = _cmd("PING#")
+    return code, msg
 end
 
 -- Get Cambrian server version. Returns: (major, minor, patch)
@@ -824,7 +842,7 @@ function cambrian_start_session()
     _cmd("START SESSION#")
 end
 
--- Clear server internal memory
+-- Clear server internal memory (reset smart search state)
 function cambrian_clear_memory()
     _cmd("CLEAR MEMORY#")
 end
@@ -867,6 +885,117 @@ function cambrian_smart_search_random()
 end
 
 -- ======================================
+-- Calibration Commands
+-- ======================================
+
+-- Set rig parameters before starting calibration.
+-- rig_pose: {x,y,z,rx,ry,rz} — approximate camera rig pose relative to robot flange (mm, degrees)
+-- focal_length: focal length in mm (standard rig = 8)
+-- stereo_separation: stereo separation in meters (optional; standard = 0.08)
+-- camera_tilt: camera tilt in degrees (optional; standard = 5)
+function cambrian_set_calibration_rig_pose(rig_pose, focal_length, stereo_separation, camera_tilt)
+    local req = "SET CALIBRATION RIG POSE#" .. _pose_str(rig_pose) .. "*" .. tostring(focal_length)
+    if stereo_separation ~= nil then
+        req = req .. "*" .. tostring(stereo_separation) .. "*" .. tostring(camera_tilt or 0)
+    end
+    _cmd(req)
+end
+
+-- Initiate a new calibration (both automatic and manual).
+-- For automatic calibration: rig_pose should be a rough approximation of rig pose relative to flange.
+-- For manual calibration: rig_pose can be {0,0,0,0,0,0}.
+-- Standard rig:  focal_length=8, stereo_separation=0.08, camera_tilt=5
+-- Small rig:     focal_length=8, stereo_separation=0.06, camera_tilt=8
+function cambrian_start_calibration(rig_pose, focal_length, stereo_separation, camera_tilt)
+    local req = "START CALIBRATION#" .. _pose_str(rig_pose) .. "*" .. tostring(focal_length)
+    if stereo_separation ~= nil then
+        req = req .. "*" .. tostring(stereo_separation) .. "*" .. tostring(camera_tilt or 0)
+    end
+    _cmd(req)
+end
+
+-- Query the next calibration step. Only valid after cambrian_start_calibration().
+-- reply_data: optional string to pass back when previous step was 3:
+--             "1" = pose is reachable, "2" = pose is not reachable
+-- Returns: (step, x, y, z, a, b, g)
+--   step=1 → move robot to {x,y,z,a,b,g}, then call again
+--   step=2 → calibration finished
+--   step=3 → test reachability of {x,y,z,a,b,g}, pass result in next call via reply_data
+--   step=-1 → error
+function cambrian_next_calibration_step(reply_data)
+    local req = "NEXT CALIBRATION STEP#"
+    if reply_data ~= nil and reply_data ~= "" then
+        req = req .. reply_data
+    end
+    local code, msg, dat = _cmd(req)
+    if code == 0 and dat ~= nil then
+        local d = cambrian_divid_reply_data(dat)
+        return tonumber(d[1]),
+               tonumber(d[2]), tonumber(d[3]), tonumber(d[4]),
+               tonumber(d[5]), tonumber(d[6]), tonumber(d[7])
+    end
+    return -1, 0, 0, 0, 0, 0, 0
+end
+
+-- Capture one image for manual calibration.
+-- Must be called after cambrian_start_calibration(). Requires at least 8 captures
+-- from different positions before calling cambrian_run_manual_calibration().
+function cambrian_capture_calibration_image()
+    _cmd("CAPTURE CALIBRATION IMAGE#")
+end
+
+-- Set calibration mount mode.
+-- space: "BASE" = fixed-mounted camera, "FLANGE" = robot-mounted camera
+function cambrian_set_calibration_mount(space)
+    _cmd("SET CALIBRATION MOUNT#" .. space)
+end
+
+-- Begin manual calibration procedure.
+-- Requires at least 8 images captured via cambrian_capture_calibration_image() first.
+function cambrian_run_manual_calibration()
+    _cmd("RUN MANUAL CALIBRATION#")
+end
+
+-- High-level automatic calibration loop.
+-- Handles the full NEXT CALIBRATION STEP loop including reachability testing.
+--
+-- Parameters:
+--   rig_pose: {x,y,z,rx,ry,rz} — approximate rig pose relative to flange (mm, degrees)
+--   focal_length: mm (standard rig: 8)
+--   stereo_separation: meters (standard: 0.08), nil to omit
+--   camera_tilt: degrees (standard: 5), nil to omit
+--   move_fn: function(x, y, z, a, b, g) — called to move robot to each calibration pose.
+--            Must block until the motion is complete (e.g. use Go() or MoveJ inside).
+--            Pass nil to skip motion (for testing only).
+--
+-- Returns: true = calibration finished successfully, false = error
+--
+-- Example:
+--   local rig = {0, 0, 200, 0, 0, 0}
+--   cambrian_run_auto_calibration(rig, 8, 0.08, 5, function(x,y,z,a,b,g)
+--       Go({x,y,z,a,b,g}, nil, 20)
+--   end)
+function cambrian_run_auto_calibration(rig_pose, focal_length, stereo_separation, camera_tilt, move_fn)
+    cambrian_start_calibration(rig_pose, focal_length, stereo_separation, camera_tilt)
+    local reply_data = ""
+    while true do
+        local step, x, y, z, a, b, g = cambrian_next_calibration_step(reply_data)
+        reply_data = ""
+        if step == 1 then
+            if move_fn then move_fn(x, y, z, a, b, g) end
+        elseif step == 2 then
+            return true
+        elseif step == 3 then
+            local j1 = GetInverseKin(0, x, y, z, a, b, g, -1)
+            reply_data = (type(j1) == "number") and "1" or "2"
+        else
+            print("CAMBRIAN CALIBRATION: unexpected step=" .. tostring(step))
+            return false
+        end
+    end
+end
+
+-- ======================================
 -- Camera Commands
 -- ======================================
 
@@ -881,7 +1010,8 @@ function cambrian_cameras_manual()
 end
 
 -- Set auto exposure parameters
--- target: target brightness (5-255), tolerance: allowed deviation (1-250), max_iterations: max iterations (1-10), max_exposure: max exposure value
+-- target: target brightness (5–255), tolerance: allowed deviation (1–250)
+-- max_iterations: max algorithm iterations (1–10), max_exposure: max exposure value
 function cambrian_cameras_auto_params(target, tolerance, max_iterations, max_exposure)
     _cmd("CAMERAS AUTO PARAMS#" .. tostring(target) .. "*"
          .. tostring(tolerance) .. "*"
@@ -889,17 +1019,17 @@ function cambrian_cameras_auto_params(target, tolerance, max_iterations, max_exp
          .. tostring(max_exposure))
 end
 
--- Set camera exposure directly (manual mode)
+-- Set camera exposure directly (manual mode only)
 function cambrian_cameras_exposure(exposure)
     _cmd("CAMERAS EXPOSURE#" .. tostring(exposure))
 end
 
--- Set camera gain
+-- Set camera gain (higher = brighter but more noise; send 999 for maximum)
 function cambrian_cameras_gain(gain)
     _cmd("CAMERAS GAIN#" .. tostring(gain))
 end
 
--- Check camera status. Returns: 1=OK, 0=error
+-- Check camera connection status. Returns: 1=OK, 0=no cameras, -1=error
 function cambrian_check_cameras()
     local code, msg, dat = _cmd("CHECK CAMERAS#")
     if code == 0 then
@@ -909,17 +1039,17 @@ function cambrian_check_cameras()
     return -1
 end
 
--- Restart cameras
+-- Restart the camera server and reconnect
 function cambrian_restart_cameras()
     _cmd("RESTART CAMERAS#")
 end
 
--- Block until cameras are ready
+-- Block until camera connection is established (errors on timeout)
 function cambrian_wait_cameras()
     _cmd("WAIT CAMERAS#")
 end
 
--- Get current camera auto mode state. Returns: 1=auto, 0=manual
+-- Get current camera exposure mode. Returns: 1=auto, 0=manual
 function cambrian_get_camera_auto()
     local code, msg, dat = _cmd("GET CAMERA AUTO#")
     if code == 0 then
@@ -963,7 +1093,7 @@ end
 -- Collision / Box Commands
 -- ======================================
 
--- Clear all registered collision elements
+-- Clear all registered collision elements (environment + flange boxes)
 function cambrian_clear_collision_elements()
     _cmd("CLEAR COLLISION ELEMENTS#")
 end
@@ -973,16 +1103,16 @@ function cambrian_clear_block_volumes()
     _cmd("CLEAR BLOCK VOLUMES#")
 end
 
--- Set a spherical block volume around a pose (for collision avoidance)
--- pose: {x,y,z,rx,ry,rz}, radius: radius (m), iterations: number of cycles to maintain
+-- Set a spherical block volume around a pose (in Robot Base space)
+-- pose: {x,y,z,rx,ry,rz}, radius: radius (meters), iterations: prediction cycles to maintain
 function cambrian_block_volume(pose, radius, iterations)
     local req = "BLOCK VOLUME#" .. _pose_str(pose) .. "*"
               .. tostring(radius) .. "*" .. tostring(iterations)
     _cmd(req)
 end
 
--- Set gripper collision box (dimensions in mm)
--- box_name: box name, center_matrix: {x,y,z,rx,ry,rz}, x/y/z_size: dimensions per axis (mm)
+-- Set gripper collision box (flange-attached). Dimensions in mm — converted to meters internally.
+-- box_name: box name, center_matrix: {x,y,z,rx,ry,rz} relative to flange, x/y/z_size: mm
 function cambrian_set_gripper_box(box_name, center_matrix, x_size, y_size, z_size)
     local req = "SET GRIPPER BOX#" .. box_name
               .. "*" .. _pose_str(center_matrix)
@@ -990,8 +1120,8 @@ function cambrian_set_gripper_box(box_name, center_matrix, x_size, y_size, z_siz
     _cmd(req)
 end
 
--- Set workspace box (dimensions in mm, including wall thickness)
--- wall_thick: wall thickness (mm)
+-- Set workspace environment box. Dimensions in mm — converted to meters internally.
+-- wall_thick=0: solid box (center of cuboid); wall_thick>0: concave box (center of floor)
 function cambrian_set_box(box_name, center_matrix, x_size, y_size, z_size, wall_thick)
     local req = "SET BOX#" .. box_name
               .. "*" .. _pose_str(center_matrix)
@@ -1000,7 +1130,7 @@ function cambrian_set_box(box_name, center_matrix, x_size, y_size, z_size, wall_
     _cmd(req)
 end
 
--- Define box from 3 points (dimensions in mm)
+-- Define box from 3 corner points (p1,p2,p3 must be clockwise from above). Dimensions in mm.
 function cambrian_3_point_box(box_name, p1, p2, p3, depth, wall_thick)
     local req = "3 POINT BOX#" .. box_name
               .. "*" .. _pose_str(p1)
@@ -1011,7 +1141,7 @@ function cambrian_3_point_box(box_name, p1, p2, p3, depth, wall_thick)
     _cmd(req)
 end
 
--- Define box from 4 points (dimensions in mm)
+-- Define box from 4 corner points (p4 on box floor). Dimensions in mm.
 function cambrian_4_point_box(box_name, p1, p2, p3, p4, wall_thick)
     local req = "4 POINT BOX#" .. box_name
               .. "*" .. _pose_str(p1)
@@ -1022,7 +1152,7 @@ function cambrian_4_point_box(box_name, p1, p2, p3, p4, wall_thick)
     _cmd(req)
 end
 
--- Check collision for a specific pose. Returns: 0=safe, 1=collision
+-- Test rig collision boxes against environment boxes for a given pose. Returns: 0=safe, 1=collision
 function cambrian_test_pose(test_pose)
     local code, msg, dat = _cmd("TEST POSE#" .. _pose_str(test_pose))
     if code == 0 then
@@ -1033,8 +1163,8 @@ function cambrian_test_pose(test_pose)
     return -1
 end
 
--- Check collision including robot body using joint angles. Returns: 1=collision, 0=safe
--- joints: {j1,j2,j3,j4,j5,j6} (degrees)
+-- Test collision including robot body using joint angles. Returns: 1=collision, 0=safe
+-- joints: {j1,j2,j3,j4,j5,j6} in degrees
 function cambrian_test_pose_withbody(joints)
     local req = "TEST POSE WITHBODY#"
               .. tostring(joints[1]) .. "," .. tostring(joints[2]) .. ","
@@ -1048,7 +1178,7 @@ function cambrian_test_pose_withbody(joints)
     return -1
 end
 
--- Check robot body collision status. Returns: 1=collision, 0=safe
+-- Check robot body collision status. Returns: 1=valid body for collision detection, 0=not valid
 function cambrian_check_body()
     local code, msg, dat = _cmd("CHECK BODY#")
     if code == 0 then
@@ -1116,7 +1246,7 @@ function cambrian_search_grid_check_init(grid_name)
     return -1
 end
 
--- Check if search grid is complete. Returns: 1=all cells visited, 0=incomplete
+-- Check if search grid is complete. Returns: 1=all cells at max depth, 0=incomplete
 -- grid_name is optional (nil for single-grid setups)
 function cambrian_search_grid_finished(grid_name)
     local req = "SEARCH GRID FINISHED#"
@@ -1165,7 +1295,7 @@ function cambrian_search_grid_get_cell(...)
     return nil, -1, -1
 end
 
--- Update search grid state (mark current cell as visited)
+-- Update search grid state (mark current cell as visited — call after every GET PREDICTION)
 -- grid_name is optional
 function cambrian_search_grid_update(grid_name)
     local req = "SEARCH GRID UPDATE#"
@@ -1181,7 +1311,7 @@ function cambrian_search_grid_reset(grid_name)
     _cmd(req)
 end
 
--- Add a specific cell to the ignore list
+-- Add a specific cell to the ignore list (ignored cells are never visited)
 -- Usage: cambrian_search_grid_ignore(cell_x, cell_y) or
 --        cambrian_search_grid_ignore(grid_name, cell_x, cell_y)
 function cambrian_search_grid_ignore(...)
@@ -1195,7 +1325,7 @@ function cambrian_search_grid_ignore(...)
     _cmd(req)
 end
 
--- Block a specific cell for a given number of cycles
+-- Block a specific cell for a given number of prediction cycles
 -- Usage: cambrian_search_grid_block(cell_x, cell_y, iterations) or
 --        cambrian_search_grid_block(grid_name, cell_x, cell_y, iterations)
 function cambrian_search_grid_block(...)
@@ -1246,7 +1376,28 @@ function cambrian_search_grid_init(...)
     _cmd(req)
 end
 
--- Get grid fill level (0.0=empty, 1.0=full)
+-- Auto-initialize search grid from box and model info. Returns: (num_x_cells, num_y_cells)
+-- rotate_grid: 0–3 (optional), fov_scaling_factor: FOV scale (optional), fov_overlap_ratios: {x,y} (optional)
+function cambrian_search_grid_auto_init(grid_name, box_name, model_name, rotate_grid, fov_scaling_factor, fov_overlap_ratios)
+    local req = "SEARCH GRID AUTO INIT#" .. grid_name .. "*" .. box_name .. "*" .. model_name
+    if rotate_grid ~= nil then
+        req = req .. "*" .. tostring(rotate_grid)
+        if fov_scaling_factor ~= nil then
+            req = req .. "*" .. tostring(fov_scaling_factor)
+            if fov_overlap_ratios ~= nil then
+                req = req .. "*" .. fov_overlap_ratios[1] .. "," .. fov_overlap_ratios[2]
+            end
+        end
+    end
+    local code, msg, dat = _cmd(req)
+    if code == 0 then
+        local d = cambrian_divid_reply_data(dat)
+        return tonumber(d[1]), tonumber(d[2])
+    end
+    return -1, -1
+end
+
+-- Get grid fill level (1.0=initial/full, 0.0=fully explored)
 -- grid_name is optional
 function cambrian_search_grid_level(grid_name)
     local req = "SEARCH GRID LEVEL#"
@@ -1272,7 +1423,7 @@ function cambrian_search_grid_dimensions(grid_name)
     return -1, -1
 end
 
--- Get fill level of a specific cell (float)
+-- Get fill level of a specific cell. Returns: float (0=empty, 1=initial)
 -- Usage: cambrian_search_grid_get_cell_level(cell_x, cell_y) or
 --        cambrian_search_grid_get_cell_level(grid_name, cell_x, cell_y)
 function cambrian_search_grid_get_cell_level(...)
@@ -1291,7 +1442,7 @@ function cambrian_search_grid_get_cell_level(...)
     return -1
 end
 
--- Set fill level of a specific cell
+-- Set fill level of a specific cell (1=reset to initial; range: 0 to infinity)
 -- Usage: cambrian_search_grid_set_cell_level(cell_x, cell_y, level) or
 --        cambrian_search_grid_set_cell_level(grid_name, cell_x, cell_y, level)
 function cambrian_search_grid_set_cell_level(...)
@@ -1305,7 +1456,7 @@ function cambrian_search_grid_set_cell_level(...)
     _cmd(req)
 end
 
--- Set fill level for all cells at once
+-- Set fill level for all cells at once (1=reset all to initial; range: 0 to infinity)
 -- Usage: cambrian_search_grid_set_level(level) or
 --        cambrian_search_grid_set_level(grid_name, level)
 function cambrian_search_grid_set_level(...)
@@ -1319,8 +1470,8 @@ function cambrian_search_grid_set_level(...)
     _cmd(req)
 end
 
--- Set search grid weights
--- weights: {cell_height, center_distance, prev_visit_distance, prediction_count, time_since_visit, randomness} — 6 floats
+-- Set search grid cell scoring weights
+-- weights: {cell_height, center_dist, prev_visit_dist, pred_count, time_since_visit, randomness} — 6 floats
 -- Usage: cambrian_search_grid_set_weights(weights) or
 --        cambrian_search_grid_set_weights(grid_name, weights)
 function cambrian_search_grid_set_weights(...)
@@ -1352,26 +1503,9 @@ function cambrian_search_grid_get_weights(grid_name)
     return nil
 end
 
--- Auto-initialize search grid from box and model info. Returns: (num_x_cells, num_y_cells)
--- rotate_grid: 0-3 rotations (optional), fov_scaling_factor: FOV scale (optional)
-function cambrian_search_grid_auto_init(grid_name, box_name, model_name, rotate_grid, fov_scaling_factor, fov_overlap_ratios)
-    local req = "SEARCH GRID AUTO INIT#" .. grid_name .. "*" .. box_name .. "*" .. model_name
-    if rotate_grid ~= nil then
-        req = req .. "*" .. tostring(rotate_grid)
-        if fov_scaling_factor ~= nil then
-            req = req .. "*" .. tostring(fov_scaling_factor)
-            if fov_overlap_ratios ~= nil then
-                req = req .. "*" .. fov_overlap_ratios[1] .. "," .. fov_overlap_ratios[2]
-            end
-        end
-    end
-    local code, msg, dat = _cmd(req)
-    if code == 0 then
-        local d = cambrian_divid_reply_data(dat)
-        return tonumber(d[1]), tonumber(d[2])
-    end
-    return -1, -1
-end
+-- ======================================
+-- HMI / Debug Utilities
+-- ======================================
 
 -- Store current TCP pose in global variables (for HMI monitoring)
 function ShowPos()

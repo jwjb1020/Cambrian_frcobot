@@ -173,7 +173,8 @@ ip link show | grep br-
 ```
 frcobot_en/
 ├── README.md                        ← This file
-├── FairinoForCambrian_v3.lua        ← Main library (upload to robot)
+├── FairinoForCambrian_v4.lua        ← Main library (current — upload to robot)
+├── FairinoForCambrian_v3.lua        ← Previous version (kept for reference)
 ├── gui_popup_server.py              ← Popup GUI server (run on host PC)
 │
 ├── example/
@@ -186,7 +187,7 @@ frcobot_en/
 │   └── YYYY-MM-DD.txt
 │
 └── documents/
-    ├── Cambrian_VISION_API.md       ← Official Cambrian API documentation
+    ├── Cambrian_VISION_API.md       ← Official Cambrian API documentation (v2.3, full reference)
     ├── FRLua_programming_script_user_manual.md  ← Fairino Lua manual
     ├── MoveO.lua                    ← Fairino engineer example (ServoMove)
     ├── PoseTranseCalc.lua           ← Fairino engineer example (kinematics)
@@ -205,9 +206,9 @@ python3 gui_popup_server.py
 
 ### Step 2 — Upload the library to the robot
 
-Upload `FairinoForCambrian_v3.lua` to the robot controller via the web UI:
+Upload `FairinoForCambrian_v4.lua` to the robot controller via the web UI:
 ```
-Path on robot: /usr/local/etc/controller/lua/FairinoForCambrian_v3.lua
+Path on robot: /usr/local/etc/controller/lua/FairinoForCambrian_v4.lua
 ```
 
 ### Step 3 — Write a robot script
@@ -215,7 +216,7 @@ Path on robot: /usr/local/etc/controller/lua/FairinoForCambrian_v3.lua
 ```lua
 -- Load the library
 package.path = package.path .. ";/usr/local/etc/controller/lua/?.lua"
-require("FairinoForCambrian_v3")
+require("FairinoForCambrian_v4")
 
 -- Configure connection
 set_connection_info("192.168.58.200", 4000)  -- Cambrian Vision PC IP:port
@@ -256,8 +257,8 @@ end
 -- Set Cambrian server address
 set_connection_info(ip_string, port_number)
 
--- Ping the server
-cambrian_ping()
+-- Ping the server (returns code=0 on success)
+local code, msg = cambrian_ping()
 
 -- Get server version
 local major, minor, patch = cambrian_get_version()
@@ -383,7 +384,76 @@ cambrian_set_state(nil, nil, {x, y, z, rx, ry, rz})
 -- Revert to automatic reading: set _fr_tool_offset_manual = false
 ```
 
-### 7.9 Popup
+### 7.9 Calibration
+
+Calibration must be run once before the first prediction to establish the relationship between the camera rig and the robot flange.
+
+**Automatic calibration (recommended):**
+
+```lua
+-- High-level helper — handles the full loop automatically
+-- move_fn is called each time the robot needs to move to a calibration pose
+local rig_pose = {0, 0, 200, 0, 0, 0}  -- rough camera position relative to flange (mm)
+cambrian_run_auto_calibration(
+    rig_pose,   -- approximate rig pose {x,y,z,rx,ry,rz} relative to flange
+    8,          -- focal length mm (standard rig = 8)
+    0.08,       -- stereo separation m (standard = 0.08; small rig = 0.06)
+    5,          -- camera tilt degrees (standard = 5; small rig = 8)
+    function(x, y, z, a, b, g)
+        Go({x, y, z, a, b, g}, nil, 20)   -- move robot to calibration pose
+    end
+)
+```
+
+**Manual calibration (step by step):**
+
+```lua
+-- 1. Start calibration session
+cambrian_start_calibration({0,0,0,0,0,0}, 8)
+
+-- 2. Move robot to different positions overlooking the calibration board,
+--    capturing one image at each position (minimum 8 images)
+Move("calib_pose_1")
+cambrian_capture_calibration_image()
+Move("calib_pose_2")
+cambrian_capture_calibration_image()
+-- ... repeat for at least 8 poses
+
+-- 3. Trigger the calibration calculation
+cambrian_run_manual_calibration()
+```
+
+**Low-level step-by-step (auto calibration without the helper):**
+
+```lua
+cambrian_start_calibration(rig_pose, 8, 0.08, 5)
+local reply = ""
+while true do
+    local step, x, y, z, a, b, g = cambrian_next_calibration_step(reply)
+    reply = ""
+    if step == 1 then
+        Go({x, y, z, a, b, g}, nil, 20)   -- move to pose
+    elseif step == 2 then
+        break   -- done
+    elseif step == 3 then
+        -- test reachability and report back
+        local j1 = GetInverseKin(0, x, y, z, a, b, g, -1)
+        reply = (type(j1) == "number") and "1" or "2"
+    end
+end
+```
+
+| Function | Description |
+|----------|-------------|
+| `cambrian_run_auto_calibration(rig_pose, fl, ss, tilt, move_fn)` | Full auto-calibration loop |
+| `cambrian_start_calibration(rig_pose, focal_length, sep, tilt)` | Start calibration session |
+| `cambrian_next_calibration_step(reply_data)` | Get next step (1=move, 2=done, 3=test reach) |
+| `cambrian_capture_calibration_image()` | Capture image for manual calibration |
+| `cambrian_run_manual_calibration()` | Run manual calibration (after ≥8 images) |
+| `cambrian_set_calibration_rig_pose(pose, fl, sep, tilt)` | Set rig params without starting |
+| `cambrian_set_calibration_mount(space)` | `"BASE"` fixed / `"FLANGE"` robot-mounted |
+
+### 7.10 Popup
 
 ```lua
 -- Show a blocking popup on the host PC
@@ -531,14 +601,14 @@ popup(GetActualTCPNum(),           "Tool Number")
 
 1. Open the Fairino robot web UI in a browser: `http://192.168.58.2` (simulator) or the physical robot IP
 2. Navigate to the Lua script file manager
-3. Upload `FairinoForCambrian_v3.lua` to:
+3. Upload `FairinoForCambrian_v4.lua` to:
    ```
-   /usr/local/etc/controller/lua/FairinoForCambrian_v3.lua
+   /usr/local/etc/controller/lua/FairinoForCambrian_v4.lua
    ```
 4. Load it in your robot script with:
    ```lua
    package.path = package.path .. ";/usr/local/etc/controller/lua/?.lua"
-   require("FairinoForCambrian_v3")
+   require("FairinoForCambrian_v4")
    ```
 
 > **Note:** After modifying and re-uploading the library, a robot controller restart may be needed to clear the `require()` module cache.
@@ -547,7 +617,20 @@ popup(GetActualTCPNum(),           "Tool Number")
 
 ## 12. Changelog
 
-### v0.3.3 (current — `FairinoForCambrian_v3.lua`)
+### v0.4.0 (current — `FairinoForCambrian_v4.lua`)
+- Added full **Calibration Commands** section:
+  - `cambrian_start_calibration()` — initiate auto or manual calibration
+  - `cambrian_next_calibration_step()` — query next step in auto-calibration loop (step 1=move, 2=done, 3=test reachability)
+  - `cambrian_capture_calibration_image()` — capture image for manual calibration
+  - `cambrian_run_manual_calibration()` — trigger manual calibration after ≥8 images
+  - `cambrian_set_calibration_rig_pose()` — set rig parameters without starting calibration
+  - `cambrian_set_calibration_mount()` — set BASE (fixed) or FLANGE (robot-mounted) mode
+  - `cambrian_run_auto_calibration()` — high-level loop helper: handles full NEXT CALIBRATION STEP loop including reachability testing via `GetInverseKin`
+- Fixed `set_tcp()`: type guard condition was inverted (`type ~= "number"` → `type == "number"`)
+- `_n()` safe-number helper moved to module level (was nested closure inside `get_current_robot_info`)
+- `cambrian_ping()` now returns `(code, msg)` so callers can detect connection failure
+
+### v0.3.3 (`FairinoForCambrian_v3.lua`)
 - Added `popup()` function — sends TCP message to external PC GUI server, shows tkinter dialog
 - Added `POPUP_SERVER_IP / PORT / ENABLE` globals — defaults to `192.168.58.1:9999`
 - [Stop] button calls `error()` to terminate the script immediately; no return value check needed
@@ -587,7 +670,8 @@ popup(GetActualTCPNum(),           "Tool Number")
 ---
 ## Known Issues / TODO
 
-- [ ] **`set_tcp()` not yet validated on physical robot** — `SetToolCoord` parameter order needs live verification. Test: call `set_tcp({100,0,200,0,0,0})` then confirm `GetTCPOffset()` returns `x=100, z=200`.
+- [ ] **`set_tcp()` not yet validated on physical robot** — `SetToolCoord` parameter order needs live verification. Test: call `set_tcp({100,0,200,0,0,0})` then confirm `GetTCPOffset()` returns `x=100, z=200`. (type-guard bug fixed in v4)
 - [ ] **Full pick cycle test** — end-to-end grasp cycle with gripper I/O not yet validated.
+- [ ] **`cambrian_run_auto_calibration` not yet tested on physical robot** — loop logic and `GetInverseKin` reachability check needs live verification.
 - [ ] There has no `popup` command so developing for debuging with another tcp server.
 
