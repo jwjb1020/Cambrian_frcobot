@@ -173,8 +173,9 @@ ip link show | grep br-
 ```
 frcobot_en/
 ├── README.md                        ← This file
-├── FairinoForCambrian_v4.lua        ← Main library (current — upload to robot)
-├── FairinoForCambrian_v3.lua        ← Previous version (kept for reference)
+├── FairinoForCambrian_v4.1.lua      ← Main library (current — upload to robot)
+├── FairinoForCambrian_v4.lua        ← Previous version (kept for reference)
+├── FairinoForCambrian_v3.lua        ← Older version (kept for reference)
 ├── gui_popup_server.py              ← Popup GUI server (run on host PC)
 │
 ├── example/
@@ -206,17 +207,18 @@ python3 gui_popup_server.py
 
 ### Step 2 — Upload the library to the robot
 
-Upload `FairinoForCambrian_v4.lua` to the robot controller via the web UI:
+Upload `FairinoForCambrian_v4.1.lua` to the robot controller via the web UI:
 ```
-Path on robot: /usr/local/etc/controller/lua/FairinoForCambrian_v4.lua
+Path on robot: /usr/local/etc/controller/lua/FairinoForCambrian_v4.1.lua
 ```
+
+> **Note:** Because Lua's `require()` treats `.` as a path separator, load this file with `dofile` instead:
 
 ### Step 3 — Write a robot script
 
 ```lua
--- Load the library
-package.path = package.path .. ";/usr/local/etc/controller/lua/?.lua"
-require("FairinoForCambrian_v4")
+-- Load the library (use dofile for filenames containing dots)
+dofile("/usr/local/etc/controller/lua/FairinoForCambrian_v4.1.lua")
 
 -- Configure connection
 set_connection_info("192.168.58.200", 4000)  -- Cambrian Vision PC IP:port
@@ -640,15 +642,15 @@ popup(GetActualTCPNum(),           "Tool Number")
 
 1. Open the Fairino robot web UI in a browser: `http://192.168.58.2` (simulator) or the physical robot IP
 2. Navigate to the Lua script file manager
-3. Upload `FairinoForCambrian_v4.lua` to:
+3. Upload `FairinoForCambrian_v4.1.lua` to:
    ```
-   /usr/local/etc/controller/lua/FairinoForCambrian_v4.lua
+   /usr/local/etc/controller/lua/FairinoForCambrian_v4.1.lua
    ```
 4. Load it in your robot script with:
    ```lua
-   package.path = package.path .. ";/usr/local/etc/controller/lua/?.lua"
-   require("FairinoForCambrian_v4")
+   dofile("/usr/local/etc/controller/lua/FairinoForCambrian_v4.1.lua")
    ```
+   > `require()` treats `.` as a path separator, so use `dofile` with the full path instead.
 
 > **Note:** After modifying and re-uploading the library, a robot controller restart may be needed to clear the `require()` module cache.
 
@@ -656,7 +658,11 @@ popup(GetActualTCPNum(),           "Tool Number")
 
 ## 12. Changelog
 
-### v0.4.0 (current — `FairinoForCambrian_v4.lua`)
+### v0.4.1 (current — `FairinoForCambrian_v4.1.lua`)
+- **Fixed `Rot2Rpy` gimbal lock bug**: the `asin`-based algorithm in v0.4.0 produced a physically incorrect output pose when pitch = ±90°, with no error or warning. Replaced with `atan2 + sy` algorithm that handles the singular case correctly.
+- Replaced hardcoded `π = 3.141592654` with Lua built-in `math.pi` for full double precision.
+
+### v0.4.0 (`FairinoForCambrian_v4.lua`)
 - Added full **Calibration Commands** section:
   - `cambrian_start_calibration()` — initiate auto or manual calibration
   - `cambrian_next_calibration_step()` — query next step in auto-calibration loop (step 1=move, 2=done, 3=test reachability)

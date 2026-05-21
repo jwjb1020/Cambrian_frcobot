@@ -1,11 +1,17 @@
 -- ====================================== --
 -- Cambrian Vision API
 -- (FAIRINO Edition)
--- Version  0.4.0
--- Release  2026/05/19
+-- Version  0.4.1
+-- Release  2026/05/21
 -- Based on v0.1.2 by Digital Media Professionals Inc.
 -- Modified for Fairino Robot by Jo Won Jun, Cambrian Robotics Korea
 -- ====================================== --
+--
+-- What's new in v0.4.1:
+--   • Replaced Rot2Rpy algorithm: asin-based → atan2+sy-based
+--     Fixes a bug in v0.4.0 where pitch ±90° (gimbal lock) produced an incorrect
+--     output pose with no error or warning
+--   • Replaced hardcoded pi constant (3.141592654) with math.pi (Lua built-in)
 --
 -- What's new in v0.4.0:
 --   • Calibration commands: cambrian_start_calibration, cambrian_next_calibration_step,
@@ -16,7 +22,6 @@
 --   • _n() safe-number helper is now module-level (was nested in get_current_robot_info)
 --   • cambrian_ping() now returns (code, msg) for connection status checking
 -- ====================================== --
--- NOTE: superseded by v0.4.1 — use FairinoForCambrian_v4.1.lua instead
 
 -- ********* Global Parameters *********
 cambrian_convert_user_num = 2
@@ -43,25 +48,33 @@ POPUP_ENABLE      = true  -- set to true to enable popups (requires gui_popup_se
 -- Math Utilities
 -- ======================================
 FZERO = 1e-6
-R2D   = 180.0/3.141592654
-D2R   = 3.141592654/180.0
+R2D   = 180.0/math.pi
+D2R   = math.pi/180.0
 
 -- Convert rotation matrix (3x3 flat array) to RPY angles (degrees)
+-- Uses atan2+sy method: numerically stable, handles gimbal lock (pitch ±90°) correctly
 function Rot2Rpy(Rot)
-    local nx,ox,ax = Rot[1], Rot[2], Rot[3]
-    local ny,oy,ay = Rot[4], Rot[5], Rot[6]
-    local nz,oz,az = Rot[7], Rot[8], Rot[9]
-    local pitch = math.asin(-nz)
-    local cb    = math.cos(pitch)
-    local roll, yaw = 0, 0
-    if math.abs(cb) < FZERO then
-        local sb = math.sin(pitch)
-        roll = 0
-        yaw  = math.atan2(ox*sb, oy)
+    local R = {
+        {Rot[1], Rot[2], Rot[3]},
+        {Rot[4], Rot[5], Rot[6]},
+        {Rot[7], Rot[8], Rot[9]}
+    }
+
+    local sy = math.sqrt(R[1][1]*R[1][1] + R[2][1]*R[2][1])
+    local singular = sy < 1e-9
+
+    local roll, pitch, yaw
+
+    if not singular then
+        roll  = math.atan2(R[3][2], R[3][3])
+        pitch = math.atan2(-R[3][1], sy)
+        yaw   = math.atan2(R[2][1], R[1][1])
     else
-        yaw  = math.atan2(ny/cb, nx/cb)
-        roll = math.atan2(oz/cb, az/cb)
+        roll  = math.atan2(-R[2][3], R[2][2])
+        pitch = math.atan2(-R[3][1], sy)
+        yaw   = 0.0
     end
+
     return roll*R2D, pitch*R2D, yaw*R2D
 end
 
