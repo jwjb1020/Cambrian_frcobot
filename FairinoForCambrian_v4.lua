@@ -16,7 +16,7 @@
 --   • _n() safe-number helper is now module-level (was nested in get_current_robot_info)
 --   • cambrian_ping() now returns (code, msg) for connection status checking
 -- ====================================== --
--- NOTE: superseded by v0.4.1 — use FairinoForCambrian_v4.1.lua instead
+-- NOTE: superseded by v0.4.1 — use FairinoForCambrian_v4_1.lua instead
 
 -- ********* Global Parameters *********
 cambrian_convert_user_num = 2
