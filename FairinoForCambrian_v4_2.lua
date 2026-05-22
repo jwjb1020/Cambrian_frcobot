@@ -258,7 +258,7 @@ end
 
 -- Linear move (MoveL) to Cartesian position {x,y,z,rx,ry,rz}
 -- dPos: {x,y,z,rx,ry,rz} (mm, degrees), tool: tool number (nil = current), speed: speed % (default 30)
-function Go(dPos, tool, speed)
+function move_l(dPos, tool, speed)
     local x,y,z,rx,ry,rz = dPos[1],dPos[2],dPos[3],dPos[4],dPos[5],dPos[6]
     local j1,j2,j3,j4,j5,j6 = GetInverseKin(0, x, y, z, rx, ry, rz, -1)
     local t   = tool  or GetActualTCPNum()
@@ -268,18 +268,16 @@ function Go(dPos, tool, speed)
           t,usr,spd,180,100,-1,0,0,0,0, -1,0,0,0,0,0,0,0)
 end
 
--- Joint move (MoveJ) to a named teaching point
--- pName: teaching point name registered in robot software, speed: speed % (default 30)
--- Use instead of PTP(variable) to bypass Fairino's static DB check at save time
-function Move(pName, speed)
-    local spd = speed or 30
-    local pt  = GetRobotTeachingPoint(pName)
-    local x,y,z,rx,ry,rz = pt[1],pt[2],pt[3],pt[4],pt[5],pt[6]
+-- Joint move (MoveJ) to a Cartesian pose
+-- dPos: {x,y,z,rx,ry,rz}, speed: speed % (default 30)
+function move_j(dPos, speed)
+    local x,y,z,rx,ry,rz = dPos[1],dPos[2],dPos[3],dPos[4],dPos[5],dPos[6]
     local j1,j2,j3,j4,j5,j6 = GetInverseKin(0, x,y,z,rx,ry,rz, -1)
-    local tool = GetActualTCPNum()
-    local user = GetActualWObjNum()
+    local t   = GetActualTCPNum()
+    local usr = GetActualWObjNum()
+    local spd = speed or 30
     MoveJ(j1,j2,j3,j4,j5,j6, x,y,z,rx,ry,rz,
-          tool,user,spd,180,100, 0,0,0,0,-1,0, 0,0,0,0,0,0)
+          t,usr,spd,180,100, 0,0,0,0,-1,0, 0,0,0,0,0,0)
 end
 
 -- Set TCP coordinate frame of the active tool slot to a new offset (equivalent to UR's set_tcp)

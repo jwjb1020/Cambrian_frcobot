@@ -231,7 +231,7 @@ cambrian_load_model(model)
 cambrian_wait_for_model_launch(model)
 
 -- Move to observation position
-Move("p_home", 30)
+move_j(GetRobotTeachingPoint("p_home"), 30)
 
 -- Request grasp prediction
 local result, pred_pose, grasp_type = cambrian_get_prediction(model, {}, {}, 0)
@@ -241,10 +241,10 @@ if result > 0 then
     local grasp_p, app_p, preapp_p, exit_p =
         cambrian_approach(pred_pose, {0,0,0,0,0,0}, 50, 100, 50)
 
-    Go(preapp_p.coordinate, nil, 50)  -- move to pre-approach
-    Go(app_p.coordinate,    nil, 20)  -- move to approach
+    move_l(preapp_p.coordinate, nil, 50)  -- move to pre-approach
+    move_l(app_p.coordinate,    nil, 20)  -- move to approach
     -- close gripper here
-    Go(exit_p.coordinate,   nil, 20)  -- retreat
+    move_l(exit_p.coordinate,   nil, 20)  -- retreat
     -- open gripper here
 end
 ```
@@ -372,9 +372,9 @@ local grasp_p, app_p, preapp_p, exit_p =
         50                -- exit/retreat distance (mm)
     )
 
-Go(preapp_p.coordinate, nil, 50)
-Go(app_p.coordinate,    nil, 20)
-Go(exit_p.coordinate,   nil, 20)
+move_l(preapp_p.coordinate, nil, 50)
+move_l(app_p.coordinate,    nil, 20)
+move_l(exit_p.coordinate,   nil, 20)
 ```
 
 ### 7.6 Motion
@@ -384,11 +384,15 @@ Go(exit_p.coordinate,   nil, 20)
 -- pose: {x, y, z, rx, ry, rz} (mm, degrees)
 -- tool: tool number (nil = use current active tool)
 -- speed: speed % (default 30)
-Go({x, y, z, rx, ry, rz}, tool, speed)
+move_l({x, y, z, rx, ry, rz}, tool, speed)
 
--- Joint move (MoveJ) to a named teaching point
--- pName: teaching point name as registered in robot software
-Move("point_name", speed)
+-- Joint move (MoveJ) to Cartesian pose
+-- pose: {x, y, z, rx, ry, rz} (mm, degrees)
+-- speed: speed % (default 30)
+move_j({x, y, z, rx, ry, rz}, speed)
+
+-- Example: move to a teaching point by name using move_j
+move_j(GetRobotTeachingPoint("point_name"), speed)
 ```
 
 ### 7.7 Coordinate Transform
@@ -446,7 +450,7 @@ cambrian_run_auto_calibration(
     0.08,       -- stereo separation m (standard = 0.08; small rig = 0.06)
     5,          -- camera tilt degrees (standard = 5; small rig = 8)
     function(x, y, z, a, b, g)
-        Go({x, y, z, a, b, g}, nil, 20)   -- move robot to calibration pose
+        move_l({x, y, z, a, b, g}, nil, 20)   -- move robot to calibration pose
     end
 )
 ```
@@ -459,9 +463,9 @@ cambrian_start_calibration({0,0,0,0,0,0}, 8)
 
 -- 2. Move robot to different positions overlooking the calibration board,
 --    capturing one image at each position (minimum 8 images)
-Move("calib_pose_1")
+move_j(GetRobotTeachingPoint("calib_pose_1"))
 cambrian_capture_calibration_image()
-Move("calib_pose_2")
+move_j(GetRobotTeachingPoint("calib_pose_2"))
 cambrian_capture_calibration_image()
 -- ... repeat for at least 8 poses
 
@@ -478,7 +482,7 @@ while true do
     local step, x, y, z, a, b, g = cambrian_next_calibration_step(reply)
     reply = ""
     if step == 1 then
-        Go({x, y, z, a, b, g}, nil, 20)   -- move to pose
+        move_l({x, y, z, a, b, g}, nil, 20)   -- move to pose
     elseif step == 2 then
         break   -- done
     elseif step == 3 then
@@ -664,6 +668,8 @@ popup(GetActualTCPNum(),           "Tool Number")
 ## 12. Changelog
 
 ### v0.4.2 (current — `FairinoForCambrian_v4_2.lua`)
+- **Renamed `Go` → `move_l`** — linear move (MoveL) to Cartesian pose `{x,y,z,rx,ry,rz}`
+- **Renamed `Move` → `move_j` and changed input** — now accepts Cartesian pose `{x,y,z,rx,ry,rz}` (same as `move_l`) instead of a teaching point name string; uses MoveJ internally
 - Added **`inv_pose_rpy_xyz(pose)`** — computes the inverse homogeneous transform of a pose given as `{x, y, z, roll, pitch, yaw}` (degrees). Equivalent to computing `T^-1` from `T = [R p; 0 1]`, returning `{-R^T·p, RPY(R^T)}`.
 - Added local math helper functions used internally by `inv_pose_rpy_xyz` and `Rot2Rpy`:
   - `rpydeg_to_rotmat_xyz` — RPY(deg, XYZ order) → 3×3 rotation matrix
