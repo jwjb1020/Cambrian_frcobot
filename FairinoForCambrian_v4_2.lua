@@ -1,11 +1,18 @@
 -- ====================================== --
 -- Cambrian Vision API
 -- (FAIRINO Edition)
--- Version  0.4.1
--- Release  2026/05/21
+-- Version  0.4.2
+-- Release  2026/05/22
 -- Based on v0.1.2 by Digital Media Professionals Inc.
 -- Modified for Fairino Robot by Jo Won Jun, Cambrian Robotics Korea
 -- ====================================== --
+--
+-- What's new in v0.4.2:
+--   • Added inv_pose_rpy_xyz(pose) — computes the inverse homogeneous transform
+--     of a pose given as {x,y,z,roll,pitch,yaw} (degrees); uses atan2+sy-based RPY
+--   • Added local helpers: rpydeg_to_rotmat_xyz, mat3_transpose, mat3_vec_mul,
+--     rotmat_to_rpydeg_xyz (all local, supporting inv_pose_rpy_xyz and Rot2Rpy)
+--   • Translated all Korean comments to English
 --
 -- What's new in v0.4.1:
 --   • Replaced Rot2Rpy algorithm: asin-based → atan2+sy-based
@@ -54,10 +61,9 @@ local math = math
 local sin  = math.sin
 local cos  = math.cos
 local sqrt = math.sqrt
--- Convert rotation matrix (3x3 flat array) to RPY angles (degrees)
--- Uses atan2+sy method: numerically stable, handles gimbal lock (pitch ±90°) correctly
+
 ------------------------------------------------
--- 1. RPY(deg, XYZ 순서) -> 3x3 회전행렬
+-- 1. RPY(deg, XYZ order) → 3×3 rotation matrix
 --    R = Rz(yaw) * Ry(pitch) * Rx(roll)
 ------------------------------------------------
 local function rpydeg_to_rotmat_xyz(roll_deg, pitch_deg, yaw_deg)
@@ -82,7 +88,7 @@ local function rpydeg_to_rotmat_xyz(roll_deg, pitch_deg, yaw_deg)
 end
 
 ------------------------------------------------
--- 2. 3x3 회전행렬 전치 (역행렬과 동일, 회전행렬이 정규직교이므로)
+-- 2. 3×3 rotation matrix transpose (= inverse, since rotation matrices are orthonormal)
 ------------------------------------------------
 local function mat3_transpose(R)
     return {
@@ -93,7 +99,7 @@ local function mat3_transpose(R)
 end
 
 ------------------------------------------------
--- 3. 3x3 행렬 * 3x1 벡터
+-- 3. 3×3 matrix × 3×1 vector
 ------------------------------------------------
 local function mat3_vec_mul(R, v)
     return {
@@ -104,8 +110,9 @@ local function mat3_vec_mul(R, v)
 end
 
 ------------------------------------------------
--- 4. 회전행렬 -> RPY(deg, XYZ 순서)
---    R = Rz(yaw) * Ry(pitch) * Rx(roll) 기준 [web:12][web:73]
+-- 4. Rotation matrix → RPY(deg, XYZ order)
+--    R = Rz(yaw) * Ry(pitch) * Rx(roll)
+--    Uses atan2+sy method: numerically stable, handles gimbal lock (pitch ±90°) correctly
 ------------------------------------------------
 local function rotmat_to_rpydeg_xyz(R)
     local sy = sqrt(R[1][1]*R[1][1] + R[2][1]*R[2][1])
@@ -114,9 +121,9 @@ local function rotmat_to_rpydeg_xyz(R)
     local roll, pitch, yaw
 
     if not singular then
-        roll  = math.atan2(R[3][2], R[3][3])   -- x
-        pitch = math.atan2(-R[3][1], sy)       -- y
-        yaw   = math.atan2(R[2][1], R[1][1])   -- z
+        roll  = math.atan2(R[3][2], R[3][3])   -- x-axis
+        pitch = math.atan2(-R[3][1], sy)        -- y-axis
+        yaw   = math.atan2(R[2][1], R[1][1])   -- z-axis
     else
         roll  = math.atan2(-R[2][3], R[2][2])
         pitch = math.atan2(-R[3][1], sy)
@@ -129,9 +136,8 @@ end
 ------------------------------------------------
 -- 5. pose = {x, y, z, roll_deg, pitch_deg, yaw_deg}
 --    → inverse pose = {x', y', z', roll', pitch', yaw'}
---    T = [ R  p ]
---        [ 0  1 ]
---    T_inv = [ R^T  -R^T p ]
+--    T     = [ R  p ]     T_inv = [ R^T  -R^T*p ]
+--            [ 0  1 ]             [  0      1   ]
 ------------------------------------------------
 function inv_pose_rpy_xyz(pose)
     local x   = pose[1]
@@ -141,22 +147,19 @@ function inv_pose_rpy_xyz(pose)
     local p_d = pose[5]
     local y_d = pose[6]
 
-    -- 원래 회전행렬
-    local R = rpydeg_to_rotmat_xyz(r_d, p_d, y_d)
+    local R  = rpydeg_to_rotmat_xyz(r_d, p_d, y_d)   -- original rotation matrix
+    local Rt = mat3_transpose(R)                       -- inverse rotation = transpose
 
-    -- 역회전 = 전치
-    local Rt = mat3_transpose(R)
-
-    -- 역평행이동 = -R^T * p
-    local tinv = mat3_vec_mul(Rt, {-x, -y, -z})
+    local tinv = mat3_vec_mul(Rt, {-x, -y, -z})       -- inverse translation = -R^T * p
     local xi, yi, zi = tinv[1], tinv[2], tinv[3]
 
-    -- 역회전행렬에서 다시 RPY(deg) 추출
-    local ri, pi, yi_d = rotmat_to_rpydeg_xyz(Rt)
+    local ri, pi, yi_d = rotmat_to_rpydeg_xyz(Rt)     -- extract RPY(deg) from inverse rotation matrix
 
     return {xi, yi, zi, ri, pi, yi_d}
 end
 
+-- Convert rotation matrix (3x3 flat array) to RPY angles (degrees)
+-- Uses atan2+sy method: numerically stable, handles gimbal lock (pitch ±90°) correctly
 function Rot2Rpy(Rot)
     local R = {
         {Rot[1], Rot[2], Rot[3]},

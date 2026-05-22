@@ -173,7 +173,8 @@ ip link show | grep br-
 ```
 frcobot_en/
 ├── README.md                        ← This file
-├── FairinoForCambrian_v4_1.lua      ← Main library (current — upload to robot)
+├── FairinoForCambrian_v4_2.lua      ← Main library (current — upload to robot)
+├── FairinoForCambrian_v4_1.lua      ← Previous version (kept for reference)
 ├── FairinoForCambrian_v4.lua        ← Previous version (kept for reference)
 ├── FairinoForCambrian_v3.lua        ← Older version (kept for reference)
 ├── gui_popup_server.py              ← Popup GUI server (run on host PC)
@@ -207,9 +208,9 @@ python3 gui_popup_server.py
 
 ### Step 2 — Upload the library to the robot
 
-Upload `FairinoForCambrian_v4_1.lua` to the robot controller via the web UI:
+Upload `FairinoForCambrian_v4_2.lua` to the robot controller via the web UI:
 ```
-Path on robot: /usr/local/etc/controller/lua/FairinoForCambrian_v4_1.lua
+Path on robot: /usr/local/etc/controller/lua/FairinoForCambrian_v4_2.lua
 ```
 
 ### Step 3 — Write a robot script
@@ -217,7 +218,7 @@ Path on robot: /usr/local/etc/controller/lua/FairinoForCambrian_v4_1.lua
 ```lua
 -- Load the library
 package.path = package.path .. ";/usr/local/etc/controller/lua/?.lua"
-require("FairinoForCambrian_v4_1")
+require("FairinoForCambrian_v4_2")
 
 -- Configure connection
 set_connection_info("192.168.58.200", 4000)  -- Cambrian Vision PC IP:port
@@ -399,6 +400,11 @@ local world_pose = cambrian_pose_trans(coordinate_pose, relative_pose)
 
 -- Example: offset 50 mm in Z from flange pose
 local target = cambrian_pose_trans(flange_pose, {0, 0, 50, 0, 0, 0})
+
+-- Compute the inverse of a pose {x, y, z, roll, pitch, yaw} (degrees)
+-- Returns the pose that "undoes" the given transform: T_inv such that T * T_inv = Identity
+-- Useful for converting a world-frame pose back to a relative frame
+local inv = inv_pose_rpy_xyz({x, y, z, rx, ry, rz})
 ```
 
 ### 7.8 Camera Commands
@@ -641,14 +647,14 @@ popup(GetActualTCPNum(),           "Tool Number")
 
 1. Open the Fairino robot web UI in a browser: `http://192.168.58.2` (simulator) or the physical robot IP
 2. Navigate to the Lua script file manager
-3. Upload `FairinoForCambrian_v4_1.lua` to:
+3. Upload `FairinoForCambrian_v4_2.lua` to:
    ```
-   /usr/local/etc/controller/lua/FairinoForCambrian_v4_1.lua
+   /usr/local/etc/controller/lua/FairinoForCambrian_v4_2.lua
    ```
 4. Load it in your robot script with:
    ```lua
    package.path = package.path .. ";/usr/local/etc/controller/lua/?.lua"
-   require("FairinoForCambrian_v4_1")
+   require("FairinoForCambrian_v4_2")
    ```
 
 > **Note:** After modifying and re-uploading the library, a robot controller restart may be needed to clear the `require()` module cache.
@@ -657,7 +663,16 @@ popup(GetActualTCPNum(),           "Tool Number")
 
 ## 12. Changelog
 
-### v0.4.1 (current — `FairinoForCambrian_v4_1.lua`)
+### v0.4.2 (current — `FairinoForCambrian_v4_2.lua`)
+- Added **`inv_pose_rpy_xyz(pose)`** — computes the inverse homogeneous transform of a pose given as `{x, y, z, roll, pitch, yaw}` (degrees). Equivalent to computing `T^-1` from `T = [R p; 0 1]`, returning `{-R^T·p, RPY(R^T)}`.
+- Added local math helper functions used internally by `inv_pose_rpy_xyz` and `Rot2Rpy`:
+  - `rpydeg_to_rotmat_xyz` — RPY(deg, XYZ order) → 3×3 rotation matrix
+  - `mat3_transpose` — 3×3 rotation matrix transpose (= inverse for orthonormal matrices)
+  - `mat3_vec_mul` — 3×3 matrix × 3×1 vector multiply
+  - `rotmat_to_rpydeg_xyz` — 3×3 rotation matrix → RPY(deg), atan2+sy method
+- Translated all Korean comments to English
+
+### v0.4.1 (`FairinoForCambrian_v4_1.lua`)
 - **Fixed `Rot2Rpy` gimbal lock bug**: the `asin`-based algorithm in v0.4.0 produced a physically incorrect output pose when pitch = ±90°, with no error or warning. Replaced with `atan2 + sy` algorithm that handles the singular case correctly.
 - Replaced hardcoded `π = 3.141592654` with Lua built-in `math.pi` for full double precision.
 
