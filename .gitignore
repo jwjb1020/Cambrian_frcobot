@@ -9,3 +9,6 @@ log messages/
 # OS
 .DS_Store
 Thumbs.db
+
+# Cambrian VISION docs (token-protected; keep local, do not publish)
+documents/Cambrian_VISION_API_v2_5_8.md

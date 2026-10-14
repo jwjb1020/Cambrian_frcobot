@@ -1,742 +1,207 @@
-# Fairino + Cambrian Vision — Integration API
+# Fairino + Cambrian VISION API v5
 
-Lua API library for integrating **Cambrian Vision AI** with **Fairino FR series robots**.  
-The library communicates with the Cambrian server over TCP/IP and returns grasp predictions to the robot program.
+Fairino 협동로봇 Lua 스크립트에서 Cambrian VISION PC를 호출하는 라이브러리입니다.
+대상 매뉴얼은 CambrianAPI v2.5.5이며(v2.5.8 문서로 재확인), 함수 이름은 Doosan API v2.0과 같은 `cam_*` 체계입니다.
 
----
+- 라이브러리: [CambrianAPI_Fairino.lua](CambrianAPI_Fairino.lua)
+- 예제: [example/](example/) (21개)
+- Cambrian API 문서(v2.5.8): `documents/Cambrian_VISION_API_v2_5_8.md` (로컬 전용, git 제외)
+- 이전 버전: `FairinoForCambrian_v4_2.lua`, [documents/README_v4_2.md](documents/README_v4_2.md), [example/legacy_v4_2/](example/legacy_v4_2/)
 
-## Table of Contents
-
-1. [System Overview](#1-system-overview)
-2. [Network Architecture](#2-network-architecture)
-3. [Development Environment](#3-development-environment)
-4. [Docker Simulator Setup](#4-docker-simulator-setup)
-5. [File Structure](#5-file-structure)
-6. [Quick Start](#6-quick-start)
-7. [API Reference](#7-api-reference)
-8. [GUI Popup Server](#8-gui-popup-server)
-9. [Fairino Lua Constraints](#9-fairino-lua-constraints)
-10. [Debugging](#10-debugging)
-11. [Uploading Files to the Robot](#11-uploading-files-to-the-robot)
-12. [Changelog](#12-changelog)
-
----
-
-## 1. System Overview
+## 1. 시스템 구성
 
 ```
-┌─────────────────────┐     TCP/IP      ┌─────────────────────┐
-│   Fairino Robot     │◄───────────────►│  Cambrian Vision PC │
-│  (Lua script runs   │   192.168.58.x  │  (AI grasp server)  │
-│   on controller)    │                 │  Port 4000          │
-└─────────────────────┘                 └─────────────────────┘
-          │
-          │ TCP (popup)
-          ▼
-┌─────────────────────┐
-│   Host / Dev PC     │
-│  gui_popup_server   │
-│  Port 9999          │
-└─────────────────────┘
+┌──────────────────┐   TCP 4000    ┌────────────────────┐
+│  Fairino 로봇     │──────────────►│  Cambrian VISION PC │
+│  (Lua 스크립트)   │◄──────────────│  (AI 서버)          │
+└──────────────────┘               └────────────────────┘
+         │ TCP 9999 (선택: popup)
+         ▼
+┌──────────────────┐
+│ 호스트 PC         │
+│ gui_popup_server  │
+└──────────────────┘
 ```
 
-| Component | IP Address | Port |
-|-----------|-----------|------|
-| Fairino Robot (simulator) | `192.168.58.2` | — |
-| Cambrian Vision PC | `192.168.58.200` | `4000` |
-| Host PC (popup server) | `192.168.58.1` | `9999` |
+로봇이 TCP 클라이언트이고 Cambrian PC가 서버입니다. 예제의 기본 IP는 `192.168.58.100:4000`입니다.
 
----
+## 2. 빠른 시작
 
-## 2. Network Architecture
-
-The development setup uses Docker to run the Fairino simulator alongside a physical Cambrian Vision PC connected over LAN.
-
-```
-Host PC (developer machine)
-  ├── enp12s0          ← Physical LAN → Camera/Vision PC (192.168.58.200)
-  └── br-xxxxxxx       ← Docker bridge (gateway: 192.168.58.1)
-       └── fairino-container → Virtual robot (192.168.58.2)
-```
-
-### Routing Table After Setup
-
-| Destination | Interface | Purpose |
-|-------------|-----------|---------|
-| `192.168.58.2/32` | `br-xxxxxxx` | Virtual robot (Docker) |
-| `192.168.58.200/32` | `enp12s0` | Camera PC (physical LAN) |
-| Inside container: `192.168.58.200` via `192.168.58.1` | — | Container → Camera PC |
-
-By default Docker adds a catch-all `/24` route for the bridge subnet, which prevents packets to `192.168.58.200` from routing to the physical LAN interface. The setup script removes this catch-all and adds host-specific `/32` routes.
-
----
-
-## 3. Development Environment
-
-| Item | Details |
-|------|---------|
-| OS | Ubuntu (Linux) |
-| Robot SDK | Fairino FR Series |
-| Scripting Language | Lua 5.3 (embedded in Fairino controller) |
-| Vision API | Cambrian Vision 2.4b18 |
-| Popup Server | Python 3 + tkinter |
-| Simulator | Fairino SimMachine (Docker) |
-
-### Dependencies
-
-**Python (popup server only):**
-```bash
-# No additional packages required — uses Python standard library only
-python3 --version   # 3.6+ recommended
-```
-
-**Lua** runs embedded in the Fairino robot controller. No external installation needed.
-
----
-
-## 4. Docker Simulator Setup
-
-The Fairino SimMachine Docker image provides a virtual robot controller accessible via web browser, identical to the physical robot software.
-- this site help to you https://fairino-doc-en.readthedocs.io/latest/VMMachine/controller_docker_machine.html
-- And I attached the docker and sim files on `frcobot_en/start_sim/FAIRINO SimMachine Docker`
-
-### 4.1 First-Time Setup
-
-**Step 1 — Import the Docker image:**
-```bash
-# The image file is: FAIRINOSimMachine (provided by Fairino)
-docker load -i FAIRINOSimMachine
-```
-
-**Step 2 — Create and start the container:**
-```bash
-docker run -d \
-  --name fairino-container \
-  --network bridge \
-  -p 80:80 \
-  <image-name>
-```
-
-> Refer to the official Fairino SimMachine user manual for the exact image name and full `docker run` parameters.
-
-**Step 3 — Run the network setup script:**
-```bash
-sudo bash start_sim/fairino_network_setup.sh
-```
-
-This script:
-- Starts Docker and the `fairino-container` if not running
-- Removes the Docker bridge catch-all `/24` route
-- Adds `/32` host routes for the virtual robot and camera PC
-- Adds the camera PC route inside the container
-- Runs ping tests to verify connectivity
-
-**Step 4 — Access the robot web UI:**
-```
-URL:      http://192.168.58.2
-Username: admin
-Password: 123
-```
-
-### 4.2 Daily Startup
-
-After rebooting the host PC, run the network setup script again (Docker routing resets on reboot):
-
-```bash
-sudo bash start_sim/fairino_network_setup.sh
-```
-
-### 4.3 Network Configuration Reference
-
-The script variables can be adjusted if your network configuration differs:
-
-```bash
-# In start_sim/fairino_network_setup.sh
-DOCKER_BRIDGE="br-1771327d712f"   # docker network ls to find your bridge name
-VIRTUAL_ROBOT_IP="192.168.58.2"
-CAMERA_PC_IP="192.168.58.200"
-LAN_INTERFACE="enp12s0"           # ip link to find your interface name
-CONTAINER_NAME="fairino-container"
-GATEWAY_IP="192.168.58.1"
-```
-
-To find your Docker bridge name:
-```bash
-docker network ls
-ip link show | grep br-
-```
-
----
-
-## 5. File Structure
-
-```
-frcobot_en/
-├── README.md                        ← This file
-├── FairinoForCambrian_v4_2.lua      ← Main library (current — upload to robot)
-├── FairinoForCambrian_v4_1.lua      ← Previous version (kept for reference)
-├── FairinoForCambrian_v4.lua        ← Previous version (kept for reference)
-├── FairinoForCambrian_v3.lua        ← Older version (kept for reference)
-├── gui_popup_server.py              ← Popup GUI server (run on host PC)
-│
-├── example/
-│   └── cambrianAPItest.lua          ← Example robot script
-│
-├── start_sim/
-│   └── fairino_network_setup.sh     ← Network routing setup script
-│
-├── log messages/                    ← Auto-created; popup logs stored here
-│   └── YYYY-MM-DD.txt
-│
-└── documents/
-    ├── Cambrian_VISION_API.md       ← Official Cambrian API documentation (v2.3, full reference)
-    ├── FRLua_programming_script_user_manual.md  ← Fairino Lua manual
-    ├── MoveO.lua                    ← Fairino engineer example (ServoMove)
-    ├── PoseTranseCalc.lua           ← Fairino engineer example (kinematics)
-    └── PoseTranseMove.lua           ← Fairino engineer example (MoveL)
-```
-
----
-
-## 6. Quick Start
-
-### Step 1 — Start the popup server on the host PC
-```bash
-python3 gui_popup_server.py
-# Output: [Popup server] Listening on 0.0.0.0:9999...
-```
-
-### Step 2 — Upload the library to the robot
-
-Upload `FairinoForCambrian_v4_2.lua` to the robot controller via the web UI:
-```
-Path on robot: /usr/local/etc/controller/lua/FairinoForCambrian_v4_2.lua
-```
-
-### Step 3 — Write a robot script
+1. `CambrianAPI_Fairino.lua`를 로봇 웹 UI에서 `/root/web/file/user/`에 업로드합니다.
+2. (선택) 호스트 PC에서 `python gui_popup_server.py`를 실행합니다. popup이 필요 없으면 스크립트에서 `POPUP_ENABLE = false`로 두면 됩니다.
+3. 로봇 스크립트를 작성합니다.
 
 ```lua
--- Load the library
-package.path = package.path .. ";/usr/local/etc/controller/lua/?.lua"
-require("FairinoForCambrian_v4_2")
+package.path = package.path .. ";/root/web/file/user/?.lua"
+require("CambrianAPI_Fairino")
 
--- Configure connection
-set_connection_info("192.168.58.200", 4000)  -- Cambrian Vision PC IP:port
-POPUP_SERVER_IP = "192.168.58.1"             -- Host PC IP (Docker gateway)
-POPUP_ENABLE    = true
+cam_init("192.168.58.100", 4000)   -- 한 번만 연결
+cam_startup()                       -- API 버전 보고 → PING → START SESSION → SET PREDICTION SPACE
+cam_load_model_and_wait("my_model")
 
--- Load model and wait for it to be ready
-local model = "your_model_name"
-cambrian_load_model(model)
-cambrian_wait_for_model_launch(model)
-
--- Move to observation position
-move_j(GetRobotTeachingPoint("p_home"), 30)
-
--- Request grasp prediction
-local result, pred_pose, grasp_type = cambrian_get_prediction(model, {}, {}, 0)
-
-if result > 0 then
-    -- Calculate approach poses
-    local grasp_p, app_p, preapp_p, exit_p =
-        cambrian_approach(pred_pose, {0,0,0,0,0,0}, 50, 100, 50)
-
-    move_l(preapp_p.coordinate, nil, 50)  -- move to pre-approach
-    move_l(app_p.coordinate,    nil, 20)  -- move to approach
-    -- close gripper here
-    move_l(exit_p.coordinate,   nil, 20)  -- retreat
-    -- open gripper here
+if cam_get_prediction("my_model") then
+    local grasp, app, preapp, exit_p = cam_approach(cam_grasp_pose, {0,0,0,0,0,0}, 50, 100, 80)
+    move_j(preapp, 30)
+    move_l(app, nil, 30)
+    move_l(grasp, nil, 10)
+    -- 그리퍼 ON
+    move_l(exit_p, nil, 30)
+    cam_report_pick_result(1)
 end
 ```
 
----
+> 라이브러리를 수정해 다시 업로드한 뒤에는 `require` 캐시 때문에 컨트롤러 재시작이 필요할 수 있습니다.
 
-## 7. API Reference
+## 3. 명령 보내기: `cam_request()`
 
-### 7.1 Connection
-
-```lua
--- Set Cambrian server address
-set_connection_info(ip_string, port_number)
-
--- Ping the server (returns code=0 on success)
-local code, msg = cambrian_ping()
-
--- Get server version
-local major, minor, patch = cambrian_get_version()
-```
-
-### 7.2 Sending Raw Commands (Without a Wrapper)
-
-Not every Cambrian API command has a dedicated wrapper function. For commands not covered by the library, use `cambrian_request` directly.
-
-> **Why can't I call `_cmd("PING#")` directly?**  
-> `_cmd` is declared `local function` inside the library file. In Lua, `local` is file-scoped — `require()` does not expose local symbols to the caller. Calling `_cmd` from a user script always results in `attempt to call a nil value (global '_cmd')`.
-
-**Pattern — open socket, send command, close socket:**
+v4_2에서는 다음과 같이 보냈습니다.
 
 ```lua
-local sock, ok = cambrian_connect("192.168.58.200", 4000)
-if ok then
-    local code, msg, dat = cambrian_request(sock, "PING#")
-    cambrian_disconnect(sock)
-    popup({code, msg, dat}, "result")
-end
-```
-
-> **Common mistake:** calling `cambrian_request(sock, ...)` without `cambrian_connect` first leaves `sock = nil`, causing:  
-> `500 Error: bad argument #2 to 'SocketSendString' (string expected, got nil)`
-
-**Using wrapper functions is shorter and handles the socket automatically:**
-
-```lua
--- These two are exactly equivalent:
-
--- Option A: wrapper (recommended)
-local code, msg = cambrian_ping()
-
--- Option B: manual
-local sock, ok = cambrian_connect(cambrian_ipname, cambrian_port)
-local code, msg = cambrian_request(sock, "PING#")
+local sock, ok = cambrian_connect(ip, port)
+cambrian_request(sock, "GET PREDICTION#" .. model .. "*1,3**0")
 cambrian_disconnect(sock)
 ```
 
-Use Option B only when a wrapper doesn't exist for the command you need.
-
----
-
-### 7.3 Model Management
+v5에서는 이렇게 보냅니다.
 
 ```lua
--- Load model (async — returns immediately, no response from server)
-cambrian_load_model("model_name")
-
--- Block until model is ready
-cambrian_wait_for_model_launch("model_name")
-
--- Check if ready without blocking (1=ready, 0=loading, -1=error)
-local status = cambrian_check_model_ready("model_name")
-
--- Unload
-cambrian_unload_model("model_name")
-cambrian_unload_all_models()
+cam_request("GET PREDICTION", model, "1,3", nil, 0)
 ```
 
-> **Important:** `cambrian_load_model` is a fire-and-forget command — the Cambrian server sends no response. Always follow it with `cambrian_wait_for_model_launch` before requesting predictions.
-
-### 7.4 Grasp Prediction
-
-```lua
--- Get the single best grasp prediction
--- priority_num_array: preferred grasp types, e.g. {1, 2} or {} for any
--- ignore_num_array:   grasp types to exclude, e.g. {3} or {}
--- sort_code:          0 = default sort
-local result, pred_pose, grasp_type =
-    cambrian_get_prediction("model_name", {}, {}, 0)
-
--- result > 0  → prediction found
--- result == 0 → no prediction (bin empty or no valid grasp)
--- result < 0  → error
-
--- Access the predicted pose:
-local x  = pred_pose.coordinate[1]
-local y  = pred_pose.coordinate[2]
-local z  = pred_pose.coordinate[3]
-local rx = pred_pose.coordinate[4]
-local ry = pred_pose.coordinate[5]
-local rz = pred_pose.coordinate[6]
-```
-
-```lua
--- Get all predictions at once
-local count, poses, types =
-    cambrian_get_all_predictions("model_name", {}, {}, 0)
-
--- Iterate through results
-for i = 1, count do
-    local pose = poses[i].coordinate
-    local type = types[i]
-end
-```
-
-### 7.5 Approach Pose Calculation
-
-```lua
--- Calculate grasp, approach, pre-approach, and exit poses from a prediction
-local grasp_p, app_p, preapp_p, exit_p =
-    cambrian_approach(
-        pred_pose,        -- from cambrian_get_prediction
-        {0, 0, 0, 0, 0, 0},  -- grasp offset {x,y,z,rx,ry,rz} (mm, deg)
-        50,               -- approach distance (mm, Z- axis)
-        100,              -- pre-approach distance (mm)
-        50                -- exit/retreat distance (mm)
-    )
-
-move_l(preapp_p.coordinate, nil, 50)
-move_l(app_p.coordinate,    nil, 20)
-move_l(exit_p.coordinate,   nil, 20)
-```
-
-### 7.6 Motion
-
-```lua
--- Linear move (MoveL) to Cartesian pose
--- pose: {x, y, z, rx, ry, rz} (mm, degrees)
--- tool: tool number (nil = use current active tool)
--- speed: speed % (default 30)
-move_l({x, y, z, rx, ry, rz}, tool, speed)
-
--- Joint move (MoveJ) to Cartesian pose
--- pose: {x, y, z, rx, ry, rz} (mm, degrees)
--- speed: speed % (default 30)
-move_j({x, y, z, rx, ry, rz}, speed)
-
--- Example: move to a teaching point by name using move_j
-move_j(GetRobotTeachingPoint("point_name"), speed)
-```
-
-### 7.7 Coordinate Transform
-
-```lua
--- Transform relative_pose (expressed in coordinate_pose frame) to world coordinates
--- Equivalent to UR's pose_trans(p_from, p_from_to)
-local world_pose = cambrian_pose_trans(coordinate_pose, relative_pose)
-
--- Example: offset 50 mm in Z from flange pose
-local target = cambrian_pose_trans(flange_pose, {0, 0, 50, 0, 0, 0})
-
--- Compute the inverse of a pose {x, y, z, roll, pitch, yaw} (degrees)
--- Returns the pose that "undoes" the given transform: T_inv such that T * T_inv = Identity
--- Useful for converting a world-frame pose back to a relative frame
-local inv = inv_pose_rpy_xyz({x, y, z, rx, ry, rz})
-```
-
-### 7.8 Camera Commands
-
-```lua
-cambrian_check_cameras()        -- 1=OK, 0=error
-cambrian_cameras_auto()         -- switch to auto exposure
-cambrian_cameras_manual()       -- switch to manual exposure
-cambrian_cameras_exposure(val)  -- set exposure (manual mode)
-cambrian_cameras_gain(val)      -- set gain
-cambrian_wait_cameras()         -- block until cameras ready
-cambrian_restart_cameras()
-```
-
-### 7.9 TCP Offset
-
-The library reads the active tool's TCP offset automatically via `GetTCPOffset()`. Manual override is available when the camera is mounted separately from the TCP:
-
-```lua
--- Override TCP offset manually
-cambrian_set_state(nil, nil, {x, y, z, rx, ry, rz})
-
--- Revert to automatic reading: set _fr_tool_offset_manual = false
-```
-
-### 7.10 Calibration
-
-Calibration must be run once before the first prediction to establish the relationship between the camera rig and the robot flange.
-
-**Automatic calibration (recommended):**
-
-```lua
--- High-level helper — handles the full loop automatically
--- move_fn is called each time the robot needs to move to a calibration pose
-local rig_pose = {0, 0, 200, 0, 0, 0}  -- rough camera position relative to flange (mm)
-cambrian_run_auto_calibration(
-    rig_pose,   -- approximate rig pose {x,y,z,rx,ry,rz} relative to flange
-    8,          -- focal length mm (standard rig = 8)
-    0.08,       -- stereo separation m (standard = 0.08; small rig = 0.06)
-    5,          -- camera tilt degrees (standard = 5; small rig = 8)
-    function(x, y, z, a, b, g)
-        move_l({x, y, z, a, b, g}, nil, 20)   -- move robot to calibration pose
-    end
-)
-```
-
-**Manual calibration (step by step):**
-
-```lua
--- 1. Start calibration session
-cambrian_start_calibration({0,0,0,0,0,0}, 8)
-
--- 2. Move robot to different positions overlooking the calibration board,
---    capturing one image at each position (minimum 8 images)
-move_j(GetRobotTeachingPoint("calib_pose_1"))
-cambrian_capture_calibration_image()
-move_j(GetRobotTeachingPoint("calib_pose_2"))
-cambrian_capture_calibration_image()
--- ... repeat for at least 8 poses
-
--- 3. Trigger the calibration calculation
-cambrian_run_manual_calibration()
-```
-
-**Low-level step-by-step (auto calibration without the helper):**
-
-```lua
-cambrian_start_calibration(rig_pose, 8, 0.08, 5)
-local reply = ""
-while true do
-    local step, x, y, z, a, b, g = cambrian_next_calibration_step(reply)
-    reply = ""
-    if step == 1 then
-        move_l({x, y, z, a, b, g}, nil, 20)   -- move to pose
-    elseif step == 2 then
-        break   -- done
-    elseif step == 3 then
-        -- test reachability and report back
-        local j1 = GetInverseKin(0, x, y, z, a, b, g, -1)
-        reply = (type(j1) == "number") and "1" or "2"
-    end
-end
-```
-
-| Function | Description |
-|----------|-------------|
-| `cambrian_run_auto_calibration(rig_pose, fl, ss, tilt, move_fn)` | Full auto-calibration loop |
-| `cambrian_start_calibration(rig_pose, focal_length, sep, tilt)` | Start calibration session |
-| `cambrian_next_calibration_step(reply_data)` | Get next step (1=move, 2=done, 3=test reach) |
-| `cambrian_capture_calibration_image()` | Capture image for manual calibration |
-| `cambrian_run_manual_calibration()` | Run manual calibration (after ≥8 images) |
-| `cambrian_set_calibration_rig_pose(pose, fl, sep, tilt)` | Set rig params without starting |
-| `cambrian_set_calibration_mount(space)` | `"BASE"` fixed / `"FLANGE"` robot-mounted |
-
-### 7.11 Popup
-
-```lua
--- Show a blocking popup on the host PC
--- [Continue] → program continues normally
--- [Stop]     → throws error(), terminating the script immediately
-popup("Camera connection failed!", "Alert")
-
--- Any type can be passed directly — tables are auto-serialized to {v1, v2, ...}
-popup({GetActualTCPPose()},          "TCP Pose")    -- e.g. {100.0, 200.0, 300.0, 0.0, 90.0, 0.0}
-popup({GetActualJointPosDegree()},   "Joints")
-popup({GetTCPOffset()},              "TCP Offset")
-
--- Loop until Stop is clicked (Stop throws error and exits)
-while true do
-    popup(cambrian_check_cameras(), "Camera Status")
-end
-```
-
-**Global settings:**
-```lua
-POPUP_SERVER_IP   = "192.168.58.1"  -- host PC IP (Docker gateway)
-POPUP_SERVER_PORT = 9999
-POPUP_ENABLE      = true            -- false = print to console only (not visible without direct controller access)
-```
-
----
-
-## 8. GUI Popup Server
-
-`gui_popup_server.py` runs on the host PC and displays tkinter popup dialogs triggered by the robot script.
-
-### Running
-
-```bash
-python3 gui_popup_server.py
-```
-
-The server listens on port `9999` and logs all popup events to `log messages/YYYY-MM-DD.txt`.
-
-### Protocol
-
-```
-Robot → Server:  "POPUP|Title|Body text\n"
-Server → Robot:  "CONTINUE\n"  or  "STOP\n"
-```
-
-The server blocks until the user clicks a button before sending the response, which in turn blocks the robot script. This enables human-in-the-loop decision making at any point in the program.
-
-### Log Format
-
-```
-[HH:MM:SS] [CONTINUE] Title: Body text
-[HH:MM:SS] [STOP] Title: Body text
-```
-
-Logs are saved to `log messages/YYYY-MM-DD.txt` next to the script file.
-
----
-
-## 9. Fairino Lua Constraints
-
-These constraints are specific to the Fairino controller's embedded Lua environment and differ from standard Lua:
-
-| Constraint | Details |
-|------------|---------|
-| `pcall` not allowed | Saving a script with `pcall` produces: `pcall is not allowed in lua file` |
-| `PTP(variable)` not allowed | Fairino statically resolves teaching point names at save time; variable names cause errors |
-| `print` not visible by default | Output goes to the web UI console. Use `io.open()` file logging for persistent output |
-| Code runs on save | Fairino executes the script during the save/check step — runtime API calls may return nil |
-| `require()` caching | Modules are cached in `package.loaded`. After modifying a library file, a controller restart may be required |
-| No popup/HMI API | Neither the Fairino Lua API nor the Python SDK (626 functions) provides any popup or dialog function — `popup()` in this library communicates externally via TCP |
-
-### Key Fairino Lua API Signatures
-
-```lua
--- Current TCP pose (6 direct return values)
-local x, y, z, rx, ry, rz = GetActualTCPPose()
-
--- Flange pose (unaffected by TCP offset)
-local fx, fy, fz, frx, fry, frz = GetActualToolFlangePose()
-
--- Joint angles in degrees
-local j1, j2, j3, j4, j5, j6 = GetActualJointPosDegree()
-
--- Active tool and workobject numbers
-local tool = GetActualTCPNum()
-local user = GetActualWObjNum()
-
--- TCP offset of active tool (x, y, z, rx, ry, rz)
-local tx, ty, tz, trx, try, trz = GetTCPOffset()
-
--- Inverse kinematics
-local j1, j2, j3, j4, j5, j6 = GetInverseKin(0, x, y, z, rx, ry, rz, -1)
-
--- Teaching point lookup (runtime string lookup — use instead of PTP(variable))
-local pt = GetRobotTeachingPoint("point_name")
--- pt[1..6] = {x, y, z, rx, ry, rz}
-
--- MoveL (verified parameter order)
-MoveL(j1,j2,j3,j4,j5,j6, x,y,z,rx,ry,rz,
-      tool, user, vel, acc, ovl, blendR, blendMode,
-      ex1, ex2, ex3, ex4, search, offset_flag,
-      dx, dy, dz, drx, dry, drz)
-
--- MoveJ (29 parameters total)
-MoveJ(j1,j2,j3,j4,j5,j6, x,y,z,rx,ry,rz,
-      tool, user, vel, acc, ovl,
-      ex1, ex2, ex3, ex4,
-      blendT, offset_flag,
-      ox, oy, oz, orx, ory, orz)
-```
-
----
-
-## 10. Debugging
-
-| Method | Location | How to Enable |
-|--------|----------|---------------|
-| `print("message")` | Fairino web UI console | Always active |
-| `cambrian_log(msg)` | Robot file: `cambrian_log.txt` | `CAMBRIAN_LOG_ENABLE = true` |
-| `cambrian_log_text(text)` | Cambrian server log | Always active |
-| `popup(body, title)` | Host PC tkinter popup + `log messages/` | Run `gui_popup_server.py` + `POPUP_ENABLE = true` |
-
-### File Log Path on Robot
-
-```
-/usr/local/etc/web/file/user/cambrian_log.txt
-```
-
-Accessible via the robot web UI file browser.
-
-### Popup Debug Pattern
-
-```lua
--- Pass any value directly — tables are auto-serialized
-popup({GetActualTCPPose()},        "TCP Pose")    -- {x, y, z, rx, ry, rz}
-popup({GetTCPOffset()},            "TCP Offset")
-popup({GetActualJointPosDegree()}, "Joints")
-popup(GetActualTCPNum(),           "Tool Number")
-```
-
----
-
-## 11. Uploading Files to the Robot
-
-1. Open the Fairino robot web UI in a browser: `http://192.168.58.2` (simulator) or the physical robot IP
-2. Navigate to the Lua script file manager
-3. Upload `FairinoForCambrian_v4_2.lua` to:
-   ```
-   /usr/local/etc/controller/lua/FairinoForCambrian_v4_2.lua
-   ```
-4. Load it in your robot script with:
-   ```lua
-   package.path = package.path .. ";/usr/local/etc/controller/lua/?.lua"
-   require("FairinoForCambrian_v4_2")
-   ```
-
-> **Note:** After modifying and re-uploading the library, a robot controller restart may be needed to clear the `require()` module cache.
-
----
-
-## 12. Changelog
-
-### v0.4.2 (current — `FairinoForCambrian_v4_2.lua`)
-- **Renamed `Go` → `move_l`** — linear move (MoveL) to Cartesian pose `{x,y,z,rx,ry,rz}`
-- **Renamed `Move` → `move_j` and changed input** — now accepts Cartesian pose `{x,y,z,rx,ry,rz}` (same as `move_l`) instead of a teaching point name string; uses MoveJ internally
-- Added **`inv_pose_rpy_xyz(pose)`** — computes the inverse homogeneous transform of a pose given as `{x, y, z, roll, pitch, yaw}` (degrees). Equivalent to computing `T^-1` from `T = [R p; 0 1]`, returning `{-R^T·p, RPY(R^T)}`.
-- Added local math helper functions used internally by `inv_pose_rpy_xyz` and `Rot2Rpy`:
-  - `rpydeg_to_rotmat_xyz` — RPY(deg, XYZ order) → 3×3 rotation matrix
-  - `mat3_transpose` — 3×3 rotation matrix transpose (= inverse for orthonormal matrices)
-  - `mat3_vec_mul` — 3×3 matrix × 3×1 vector multiply
-  - `rotmat_to_rpydeg_xyz` — 3×3 rotation matrix → RPY(deg), atan2+sy method
-- Translated all Korean comments to English
-
-### v0.4.1 (`FairinoForCambrian_v4_1.lua`)
-- **Fixed `Rot2Rpy` gimbal lock bug**: the `asin`-based algorithm in v0.4.0 produced a physically incorrect output pose when pitch = ±90°, with no error or warning. Replaced with `atan2 + sy` algorithm that handles the singular case correctly.
-- Replaced hardcoded `π = 3.141592654` with Lua built-in `math.pi` for full double precision.
-
-### v0.4.0 (`FairinoForCambrian_v4.lua`)
-- Added full **Calibration Commands** section:
-  - `cambrian_start_calibration()` — initiate auto or manual calibration
-  - `cambrian_next_calibration_step()` — query next step in auto-calibration loop (step 1=move, 2=done, 3=test reachability)
-  - `cambrian_capture_calibration_image()` — capture image for manual calibration
-  - `cambrian_run_manual_calibration()` — trigger manual calibration after ≥8 images
-  - `cambrian_set_calibration_rig_pose()` — set rig parameters without starting calibration
-  - `cambrian_set_calibration_mount()` — set BASE (fixed) or FLANGE (robot-mounted) mode
-  - `cambrian_run_auto_calibration()` — high-level loop helper: handles full NEXT CALIBRATION STEP loop including reachability testing via `GetInverseKin`
-- Fixed `set_tcp()`: type guard condition was inverted (`type ~= "number"` → `type == "number"`)
-- `_n()` safe-number helper moved to module level (was nested closure inside `get_current_robot_info`)
-- `cambrian_ping()` now returns `(code, msg)` so callers can detect connection failure
-
-### v0.3.3 (`FairinoForCambrian_v3.lua`)
-- Added `popup()` function — sends TCP message to external PC GUI server, shows tkinter dialog
-- Added `POPUP_SERVER_IP / PORT / ENABLE` globals — defaults to `192.168.58.1:9999`
-- [Stop] button calls `error()` to terminate the script immediately; no return value check needed
-- Any type (number, string, table) can be passed to `popup()` — tables auto-serialized to `{v1, v2, ...}`
-
-### v0.3.2
-- Added `set_tcp()` function — `SetToolCoord` wrapper to change active tool TCP offset
-- Added Korean → English comments throughout (this release restores English)
-- Renamed `cambrian_cnv_relative2world_pose` → `cambrian_pose_trans` to match UR's `pose_trans` argument order (`coordinate_pose, relative_pose`)
-
-### v0.3.1
-- Fixed `Move()` function:
-  - Changed from `pt[7..12]` (uncertain joint indices) to `pt[1..6]` (Cartesian) + `GetInverseKin()`
-  - Removed argument from `GetActualTCPNum()` — no argument matches engineer examples
-  - Fixed MoveJ exaxis/blendT order: `-1,0,0,0,0` → `0,0,0,0,-1`
-
-### v0.3.0
-- Rewrote `get_current_robot_info()`:
-  - Uses `GetActualToolFlangePose()` directly for flange pose
-  - Uses `GetActualJointPosDegree()` directly for joint angles
-  - Reads TCP offset automatically via `GetTCPOffset()` with manual override option
-- Changed `cambrian_load_model()` to use `_noread_cmd()` (fire-and-forget — Cambrian sends no response for LOAD MODEL)
-- Added nil guard in `cambrian_request()` for empty server responses
-- Added non-table input guard in `_arr_str()`
-
-### v0.2.4 and earlier
-- `pcall` usage → save error (removed)
-- `PTP(variable)` usage → save error (replaced with `GetRobotTeachingPoint` + `MoveJ`)
-- TCP offset hardcoded as `{0,0,0,0,0,0}` (replaced with `GetTCPOffset()` auto-read)
-
----
-## 13. Note
-- Docker image maybe working on only ubuntu, I already hit the problem on windows. 
-- if you want to know variable please use the function ShowPos() 
-- if you want more information for this develope, please connect to Jo Won Jun using slack
-- The engineer said rua script were not perfectly, so please check the SDK.
----
-## Known Issues / TODO
-
-- [ ] **`set_tcp()` not yet validated on physical robot** — `SetToolCoord` parameter order needs live verification. Test: call `set_tcp({100,0,200,0,0,0})` then confirm `GetTCPOffset()` returns `x=100, z=200`. (type-guard bug fixed in v4)
-- [ ] **Full pick cycle test** — end-to-end grasp cycle with gripper I/O not yet validated.
-- [ ] **`cambrian_run_auto_calibration` not yet tested on physical robot** — loop logic and `GetInverseKin` reachability check needs live verification.
-- [ ] There has no `popup` command so developing for debuging with another tcp server.
-
+| 입력 | 전송 |
+|---|---|
+| 인자 여러 개 | `*`로 연결 |
+| `nil` | 빈 칸 (`a**b`) |
+| 6개짜리 테이블 (포즈/관절) | `[x,y,z,rx,ry,rz]` |
+| `cam_list({1,3})` | `1,3` |
+| `true` / `false` | `1` / `0` |
+
+- `#` 구분자, 현재 flange 포즈·관절·툴 오프셋, `<<` 종료자는 자동으로 붙습니다.
+  - 예: `GET PREDICTION#m*1,3**0#[flange]#[joints]#[tool]#<<`
+- 반환값은 `code, msg, data`입니다.
+  - code: 0 OK / 1 ERROR / 2 WARNING / 3 PRINT / -1 응답 없음
+  - data: 콤마로 나눈 문자열 배열
+- 같은 값이 전역 `cam_code`, `cam_msg`, `cam_data`, `cam_data_str`에도 저장됩니다.
+- 응답 읽기 헬퍼:
+  - `cam_num(i)`: i번째 값을 숫자로 반환
+  - `cam_pose_at(i)`: i~i+5번째 값을 포즈로 반환
+- `cam_raw(cmd, "data")`는 DATA 문자열을 그대로 보냅니다. `SET ADVANCED CONFIG`처럼 `,` 구분자를 쓰는 명령에 사용합니다.
+
+### 설정 변수
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `CAM_PERSISTENT` | `true` | 연결을 유지합니다. 끊기면 자동으로 재연결해 한 번 재전송합니다. `false`면 명령마다 연결하고 해제합니다(v4_2 방식). |
+| `CAM_POPUP_ON_ERROR` | `true` | ERROR 응답이면 popup을 띄웁니다. |
+| `CAM_STOP_ON_ERROR` | `false` | ERROR 응답이면 `error()`로 스크립트를 정지합니다. |
+| `CAM_PRINT_REPLY` | `false` | 모든 요청과 응답을 출력합니다. |
+| `CAM_BOX_SIZE_SCALE` | `0.001` | 박스 크기 mm에 곱하는 값입니다(서버가 m를 기대한다고 가정). |
+| `cam_prediction_space` | `"FLANGE"` | FLANGE면 예측 포즈를 요청 시점의 flange와 합성해 base 좌표로 바꿉니다. |
+| `CAMBRIAN_LOG_ENABLE` | `false` | 로봇 파일 로그를 켭니다(`cambrian_log.txt`). |
+
+## 4. 함수 레퍼런스
+
+단위는 포즈 mm/deg, 관절 deg입니다. 반환된 포즈는 모두 base 좌표입니다. 거리 인자(approach, hover 등)는 mm로 받아 라이브러리가 m로 바꿔 보냅니다.
+
+| 분류 | 함수 |
+|---|---|
+| 연결/시스템 | `cam_init(ip,port)`, `cam_close()`, `cam_startup(space)`, `cam_ping()`, `cam_get_version()`, `cam_report_api_version()`, `cam_check_compatibility()`, `cam_start_session()`, `cam_list_api_commands()`, `cam_log_text(t)`, `cam_save_log(tag,min)`, `cam_clear_memory()`, `cam_report_pick_result(result[,id])` |
+| 모델 | `cam_load_model`, `cam_load_model_from_path`, `cam_load_model_and_wait`, `cam_wait_for_model_launch`, `cam_check_model_ready`, `cam_unload_model`, `cam_unload_all_models`, `cam_set_model_confidence`, `cam_set_model_recenter_crop`, `cam_set_edge_trim` |
+| 예측 | `cam_get_prediction(model,prio,ignore,sort[,test])`, `cam_get_prediction_notest`, `cam_get_next_prediction`, `cam_get_all_predictions` (반환: 개수, 결과 `cam_poses_list`/`cam_types_list`/`cam_confidence_list`), `cam_get_prediction_data`, `cam_set_prediction_space`, `cam_start/end_prediction_average`, `cam_too_close/far`, `cam_get_grasp_count`, `cam_get_part_count`, `cam_get_search_z`, `cam_smart_search_random`, `cam_block_volume`, `cam_clear_block_volumes` |
+| 카메라 | `cam_check_cameras`, `cam_wait_cameras`, `cam_restart_cameras`, `cam_cameras_auto/manual/hdr`, `cam_cameras_exposure/gain`, `cam_cameras_auto_params`, `cam_cameras_hdr_params`, `cam_cameras_sensopart`, `cam_get_camera_*`, `cam_get_rig_pose([space])`, `cam_get_left_pose`, `cam_enable/disable_liveview`, `cam_load_rig_params`, `cam_set/get_total_rigs`, `cam_set/get_active_rig` |
+| Hand-eye 캘리브레이션 | `cam_set/get_calibration_mount`, `cam_start_calibration`, `cam_new_calibration`, `cam_next_calibration_step`, `cam_auto_calibration(rig,fl,sep,tilt,speed)`, `cam_capture_calibration_image`, `cam_run_manual_calibration`, `cam_set_calibration_rig_pose`, `cam_locate_calibration_board`, `cam_set_calibration_board_charuco/chess/marker`, `cam_clear_calibration_board` |
+| 캘리브레이션 검증 | `cam_save_calibration_verification`, `cam_verify_calibration` (결과 테이블 반환), `cam_get_calibration_verification_pose`, `cam_delete_calibration_verification`, `cam_get_verification_report`, `cam_set/get_calibration_fix_intrinsics` |
+| 로봇 기구학 캘리브레이션 | `cam_send_robot_calibration_data([joints])`, `cam_start_robot_calibration`, `cam_check_robot_calibration`, `cam_reset_robot_calibration` |
+| 충돌/작업공간 | `cam_set_box`, `cam_3_point_box`, `cam_4_point_box`, `cam_set_gripper_box`, `cam_clear_collision_elements`, `cam_test_pose` (true = 충돌 없음), `cam_test_pose_withbody`, `cam_check_body`, `cam_test_clearance`, `cam_spawn/destroy/enable/disable_component_world/flange`, `cam_set_component_world/flange_pose`, `cam_set/get_robot_pose` |
+| 서치 그리드 | `cam_search_grid_init`, `_auto_init`, `_auto_init_fixed`, `_get_next` (반환: pose, i, j), `_get_cell`, `_update`, `_report`, `_block/_unblock`, `_ignore/_unignore`, `_reset_cell`, `_reset`, `_destroy(_all)`, `_finished`, `_check_init`, `_level`, `_set_level`, `_set/get_cell_level`, `_set/get_weights`, `_dimensions`, `_set/get_mode`, `_calibrate`, `_calibrate_from`, `_get_layer_state`, `_set_layer_offset`, `_set_layer_count`, `_next_layer` |
+| IK/FK | `cam_get_ik(pose,test,seed)`, `cam_get_fk(joints,tcp)`, `cam_get_joints_configuration`, `cam_set_robot_configurations` |
+| Pick sequence | `cam_get_pick_sequence(model,approach_mm,hover_mm,orient,...)`, `cam_get_next_pick_sequence`, `cam_get_pick_sequence_from_pose`, `cam_set_pick_sequence_settings`, `cam_execute_pick_sequence` |
+| 접근 포즈 | `cam_approach` (로컬 계산), `cam_offset_pose`, `cam_get_approach_pose`, `cam_get_hover_pose`, `cam_configure_approach`, `cam_get_exit_pose` |
+| 경로 계획 | `cam_get_pick_path`, `cam_get_pick_path_from_pose`, `cam_get_next_pick_path`, `cam_get_planned_path`, `cam_get_path_to_joints`, `cam_get_path_to_pose`, `cam_get_exit_path`, `cam_stream_next_waypoint`, `cam_execute_path(speed_j,speed_l,blendT)`, `cam_save_path`, `cam_get_saved_path`, `cam_delete_saved_path` |
+| Waypoint | `cam_set_waypoint`, `cam_get_waypoint_pose`, `cam_get_waypoint_joints`, `cam_remove_waypoint` |
+| 배치/드롭 | `cam_get_placement_pose`, `cam_set_part_grasped`, `cam_get_grasped_part_drop_pose`, `cam_get_drop_pose`, `cam_remove_grasped_part` (모두 `cam_report_pick_result` 전에 호출) |
+| 수학/설정 | `cam_pose_trans`, `cam_pose_inv`, `cam_get_inverse_transform`, `cam_get_pose_transform`, `cam_set/get/save/reload_advanced_config` |
+| 모션/상태 | `move_l(pose,tool,speed,blendR)`, `move_j(pose,speed,blendT,tool)`, `move_joints(j,speed,blendT)`, `move_l_joints(j,speed,blendR)`, `cam_get_tcp_pose`, `cam_get_joints`, `cam_is_pose_reachable`, `cam_set_tool_offset`, `popup`, `ShowPos` |
+
+## 5. 예제
+
+| 파일 | 내용 |
+|---|---|
+| `01_ping.lua` | 연결, startup, 연속 PING (**실기 1단계**) |
+| `02_raw_command.lua` | `cam_request()` 직접 호출, 응답 파싱 |
+| `03_hand_eye_calibration_auto.lua` | 자동 hand-eye 캘리브레이션 (**실기 2단계**) |
+| `04_hand_eye_calibration_manual.lua` | 교시점 10개 수동 캘리브레이션 |
+| `05_calibration_verify.lua` | 검증 기준 저장(SAVE) / 오차 확인(VERIFY) |
+| `06_get_rig_pose.lua` | rig / 왼쪽 카메라 포즈 |
+| `07_camera_settings.lua` | 자동/수동 노출, 게인, HDR |
+| `08_get_prediction.lua` | 기본 예측 → 픽 → 놓기 |
+| `09_get_all_predictions.lua` | 전체 후보 중 도달 가능하고 충돌 없는 것 선택 |
+| `10_prediction_average.lua` | 여러 자세 예측 평균 |
+| `11_collision_boxes.lua` | 박스, 3/4점 박스, 그리퍼 박스, 블록 볼륨 |
+| `12_search_grid.lua` | 서치 그리드 기본 |
+| `13_search_grid_auto_layers.lua` | 자동 초기화, 그리드 캘리브레이션, 층 관리 |
+| `14_pick_sequence.lua` | 서버 IK 기반 hover/approach/grasp |
+| `15_pick_path.lua` | RRT pick path + 홈 복귀 경로 |
+| `16_waypoints.lua` | 이름 있는 위치 저장/복귀 |
+| `17_placement_drop.lua` | Part Placement / 드롭 포즈 |
+| `18_multi_model.lua` | 모델 두 개 번갈아 사용 |
+| `19_robot_calibration_ik.lua` | 로봇 기구학 캘리브레이션 |
+| `20_pickandplace_noblend.lua` / `21_pickandplace_blend.lua` | 기존 화장품 pick & place 예제를 v5로 이식 |
+
+예제의 `p1`, `p2` 등은 Fairino 교시점 이름입니다. 현장에서 저장한 이름으로 바꿔 쓰세요.
+
+## 6. 실기 검증 순서
+
+1. **01_ping**: `CAM_PRINT_REPLY = true` 상태로 실행합니다.
+   - startup이 `true`이고 PING 5회가 모두 `true`이면 영구 연결이 정상입니다.
+   - 두 번째 명령부터 실패하면 `CAM_PERSISTENT = false`로 바꿔 다시 확인합니다.
+2. **02_raw_command**: 인자 직렬화와 응답 파싱을 확인합니다.
+3. **03_hand_eye_calibration_auto**: 처음에는 `SPEED`를 낮게 두고 실행합니다.
+   - 확인할 것: step 1(이동), 3(도달 가능 회신), 2(완료)가 순서대로 진행되는지
+   - 이어서 `06_get_rig_pose`로 결과를 확인합니다.
+4. **05_calibration_verify**: SAVE를 실행한 뒤 VERIFY를 실행해 오차를 확인합니다.
+5. 이후 08 → 12 → 14 → 15 순으로 진행합니다.
+
+문제가 생기면 컨트롤러 출력과 `log messages/` popup 로그를 함께 확인하세요.
+
+## 7. v4_2 → v5 대응표
+
+| v4_2 | v5 |
+|---|---|
+| `set_connection_info(ip, port)` | `cam_init(ip, port)` |
+| `cambrian_request(sock, "CMD#data")` | `cam_request("CMD", arg1, arg2, ...)` |
+| `cambrian_ping()` → `code, msg` | `cam_ping()` → `true/false` |
+| `cambrian_get_prediction(m,{},{},0)` → `got, {coordinate=p}, type` | `cam_get_prediction(m,nil,nil,0)` → `true/false`, 결과는 `cam_grasp_pose`, `cam_grasp_type`, `cam_confidence` |
+| `cambrian_get_all_predictions(...)` → `n, poses, types` | `cam_get_all_predictions(...)` → `n`, 결과는 `cam_poses_list`, `cam_types_list` |
+| `cambrian_next_prediction()` | `cam_get_next_prediction()` |
+| `cambrian_approach(pred, off, a, pa, e)` → `{coordinate=}` ×4 | `cam_approach(pose, off, a, pa, e)` → 포즈 테이블 ×4 |
+| `cambrian_pose_trans`, `inv_pose_rpy_xyz` | `cam_pose_trans`, `cam_pose_inv` (옛 이름도 사용 가능) |
+| `cambrian_search_grid_get_next(g)` → `{coordinate=p}, i, j` | `cam_search_grid_get_next(g)` → `p, i, j` |
+| `cambrian_search_grid_finished(g) == 1` | `cam_search_grid_finished(g)` (true/false) |
+| `cambrian_check_cameras() ~= 1` | `not cam_check_cameras()` |
+| `cambrian_test_pose(p)` (0 = 안전, 반전됨) | `cam_test_pose(p)` (true = 안전) |
+| `cambrian_run_auto_calibration(rig, fl, sep, tilt, move_fn)` | `cam_auto_calibration(rig, fl, sep, tilt, speed)` (이동은 내부 처리) |
+| `cambrian_set_state(nil, nil, tool)` | `cam_set_tool_offset(tool)` |
+| `cambrian_load_model` (응답 안 읽음) | `cam_load_model` (응답 읽음) |
+
+## 8. Fairino Lua 제약
+
+| 제약 | 내용 |
+|---|---|
+| `pcall` 금지 | 저장 시 `pcall is not allowed in lua file` 오류가 납니다. 라이브러리도 `pcall`을 쓰지 않습니다. |
+| `PTP(변수)` 금지 | 교시점 이름은 리터럴로 써야 합니다. 좌표로 이동하려면 `move_j`/`move_l`을 씁니다. |
+| 저장 시 실행 | 저장/검사 단계에서 스크립트가 실행되어 API가 nil을 반환할 수 있습니다. 라이브러리는 nil이면 0으로 처리합니다. |
+| `require` 캐시 | 라이브러리를 갱신한 뒤 컨트롤러 재시작이 필요할 수 있습니다. |
+| popup API 없음 | `popup()`은 외부 `gui_popup_server.py`와 TCP로 통신합니다. |
+
+## 9. 실기에서 확인이 필요한 항목
+
+라이브러리와 예제는 Fairino 함수와 Cambrian 서버를 흉내 낸 mock 환경(Lua 5.1/5.3/5.4/5.5)에서 검증했습니다. 송신 문자열, 응답 파싱, 예제 실행 흐름은 확인됐습니다. 아래 항목은 실제 로봇에서 확인해야 합니다.
+
+- **영구 연결:** `SocketReadString`으로 같은 소켓에서 연속 수신이 되는지(01_ping). 안 되면 `CAM_PERSISTENT = false`로 씁니다.
+- **응답 분할:** 긴 응답(pick path 등)이 여러 번에 나뉘어 와도 이어 붙는지. 라이브러리는 `>>`가 3개 모일 때까지 최대 `CAM_READ_RETRIES`번 다시 읽습니다.
+- **`GetInverseKinHasSolution` 반환 형식:** boolean / 숫자 / 문자열을 모두 처리하지만 실기 값 확인이 필요합니다.
+- **자동 캘리브레이션 포즈 기준:** UR/Doosan과 같이 현재 툴(TCP) 기준으로 이동합니다. flange 기준으로 와야 한다면 툴 0으로 바꿔 실행하세요.
+- **박스 크기 단위:** `CAM_BOX_SIZE_SCALE`(기본 m 변환)을 확인해야 합니다. Doosan v2.0은 변환하지 않고 보냅니다.
+- **`TEST POSE WITHBODY` 플래그 의미:** 매뉴얼 안에서도 서로 다르게 적혀 있어 원시 값을 반환합니다.
+- **경로/IK 관절값:** deg 기준(매뉴얼상 Fairino는 deg)인지 확인이 필요합니다.
