@@ -1,6 +1,7 @@
 -- ====================================================================
 -- 04. Hand-eye 캘리브레이션 (수동)
--- 교시점 p1~p10을 차례로 돌며 보드 이미지를 캡처한 뒤 계산한다.
+-- 교시점 p1~p20을 차례로 돌며 보드 이미지를 캡처한 뒤 계산한다.
+-- Cambrian 본사 권장: 16장 이상 (이 예제는 20장)
 -- 로봇 자세는 매 요청마다 자동으로 전송되므로 따로 보낼 필요가 없다.
 -- 교시점 팁: 보드가 화면 가장자리/모서리에도 오도록, 기울기(±15~30°)와 높이를 다양하게
 -- ※ Fairino는 PTP(변수)가 불가하므로 교시점을 하나씩 직접 쓴다.
@@ -41,8 +42,23 @@ PTP(p7, SPEED, -1, 0)  capture()
 PTP(p8, SPEED, -1, 0)  capture()
 PTP(p9, SPEED, -1, 0)  capture()
 PTP(p10, SPEED, -1, 0) capture()
+PTP(p11, SPEED, -1, 0) capture()
+PTP(p12, SPEED, -1, 0) capture()
+PTP(p13, SPEED, -1, 0) capture()
+PTP(p14, SPEED, -1, 0) capture()
+PTP(p15, SPEED, -1, 0) capture()
+PTP(p16, SPEED, -1, 0) capture()
+PTP(p17, SPEED, -1, 0) capture()
+PTP(p18, SPEED, -1, 0) capture()
+PTP(p19, SPEED, -1, 0) capture()
+PTP(p20, SPEED, -1, 0) capture()
 
 PTP(p1, SPEED, -1, 0)
+
+-- 캡처 실패로 권장 장수(16장)보다 적으면 알림. Continue를 누르면 그대로 계산한다.
+if captured < 16 then
+    popup("캡처 " .. captured .. "장: 권장 16장보다 적습니다.\n교시점을 확인하세요.", "cambrian")
+end
 
 if cam_run_manual_calibration() then
     popup("수동 캘리브레이션 완료 (" .. captured .. "장)\n" .. cam_msg, "cambrian")

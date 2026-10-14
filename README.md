@@ -4,8 +4,8 @@ Fairino 협동로봇 Lua 스크립트에서 Cambrian VISION PC를 호출하는 �
 대상 매뉴얼은 CambrianAPI v2.5.5이며(v2.5.8 문서로 재확인), 함수 이름은 Doosan API v2.0과 같은 `cam_*` 체계입니다.
 
 - 라이브러리: [CambrianAPI_Fairino.lua](CambrianAPI_Fairino.lua)
-- 예제: [example/](example/) (21개)
-- Cambrian API 문서(v2.5.8): `documents/Cambrian_VISION_API_v2_5_8.md` (로컬 전용, git 제외)
+- 예제: [example/](example/) (22개)
+- Cambrian API 문서(v2.5.8): `documents/Cambrian_VISION_API_v2_5_8.md`, 한국어 요약 `documents/Cambrian_VISION_API_v2_5_8_ko.html` (로컬 전용, git 제외)
 - 이전 버전: `FairinoForCambrian_v4_2.lua`, [documents/README_v4_2.md](documents/README_v4_2.md), [example/legacy_v4_2/](example/legacy_v4_2/)
 
 ## 1. 시스템 구성
@@ -28,7 +28,7 @@ Fairino 협동로봇 Lua 스크립트에서 Cambrian VISION PC를 호출하는 �
 ## 2. 빠른 시작
 
 1. `CambrianAPI_Fairino.lua`를 로봇 웹 UI에서 `/root/web/file/user/`에 업로드합니다.
-2. (선택) 호스트 PC에서 `python gui_popup_server.py`를 실행합니다. popup이 필요 없으면 스크립트에서 `POPUP_ENABLE = false`로 두면 됩니다.
+2. (선택) 호스트 PC에서 `python gui_popup_server.py`를 실행합니다. 자세한 설정은 아래 [팝업 서버 설정](#팝업-서버-설정-선택)을 보세요. popup이 필요 없으면 스크립트에서 `POPUP_ENABLE = false`로 두면 됩니다.
 3. 로봇 스크립트를 작성합니다.
 
 ```lua
@@ -51,6 +51,58 @@ end
 ```
 
 > 라이브러리를 수정해 다시 업로드한 뒤에는 `require` 캐시 때문에 컨트롤러 재시작이 필요할 수 있습니다.
+
+### 팝업 서버 설정 (선택)
+
+Fairino 컨트롤러에는 사용자 메시지 창을 띄우는 Lua 명령이 없습니다. 그래서 `popup()`은 호스트 PC에서 실행한 `gui_popup_server.py`에 TCP로 메시지를 보내 창을 띄우고, 작업자가 버튼을 누를 때까지 기다립니다.
+
+**1) 호스트 PC 준비**
+- Python 3와 tkinter가 필요합니다. Windows용 python.org 설치본에는 tkinter가 포함되어 있고, Ubuntu는 `sudo apt install python3-tk`로 설치합니다.
+- 호스트 PC가 로봇과 같은 네트워크(예: `192.168.58.x`)에 있어야 합니다.
+- Windows 방화벽에서 TCP `9999` 인바운드를 허용합니다. 관리자 PowerShell에서:
+  ```powershell
+  New-NetFirewallRule -DisplayName "Fairino popup 9999" -Direction Inbound -Protocol TCP -LocalPort 9999 -Action Allow
+  ```
+
+**2) 서버 실행**
+```bash
+python gui_popup_server.py
+# [Popup server] Listening on 0.0.0.0:9999...
+```
+- 포트를 바꾸려면 `gui_popup_server.py`의 `PORT`와 로봇 스크립트의 `POPUP_SERVER_PORT`를 같이 바꿉니다.
+- 창이 뜨는 동안 터미널을 닫으면 안 됩니다.
+
+**3) 로봇 스크립트 설정** (`require` 다음에 덮어씁니다)
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `POPUP_SERVER_IP` | `"192.168.58.1"` | 서버를 실행한 호스트 PC의 IP |
+| `POPUP_SERVER_PORT` | `9999` | 서버 포트 |
+| `POPUP_ENABLE` | `true` | `false`면 창 없이 WebApp print 창에 `[POPUP] 제목: 내용`만 남기고 바로 진행 |
+| `CAM_POPUP_ON_ERROR` | `true` | Cambrian 서버가 ERROR를 돌려주면 자동으로 popup 표시 |
+
+**4) 동작 방식**
+- `popup(내용, 제목)`: 내용에는 문자열, 숫자, 테이블을 넣을 수 있습니다. 테이블은 `{a, b, c}` 형태로 표시됩니다.
+- **Continue**를 누르거나 창을 닫으면 스크립트가 계속 진행합니다.
+- **Stop**을 누르면 `error()`로 스크립트가 즉시 종료됩니다.
+- 서버에 연결하지 못하면 print 창에 `[POPUP server connection failed]`를 남기고 기다리지 않고 진행합니다.
+- 모든 popup은 호스트 PC의 `log messages/YYYY-MM-DD.txt`에 시간, 버튼, 내용과 함께 기록됩니다.
+- 통신 형식: 로봇 → 서버 `POPUP|제목|내용\n`, 서버 → 로봇 `CONTINUE\n` 또는 `STOP\n`
+- 제목이나 내용에 `|` 문자를 넣으면 형식이 깨집니다. 줄바꿈(`\n`)은 써도 됩니다.
+- popup은 `socket_1`을 쓰고 Cambrian 통신은 `socket_0`을 써서 서로 겹치지 않습니다.
+
+**5) 연결 테스트**
+1. 호스트 PC에서 서버를 켭니다.
+2. 같은 PC의 다른 터미널에서 아래를 실행해 창이 뜨는지 봅니다.
+   ```bash
+   python -c "import socket;s=socket.create_connection(('127.0.0.1',9999));s.sendall(b'POPUP|test|hello\n');print(s.recv(64))"
+   ```
+3. 로봇에서 `example/22_popup.lua`를 실행합니다.
+
+창이 안 뜨면 순서대로 확인하세요.
+- `POPUP_SERVER_IP`가 호스트 PC의 실제 IP인지
+- 방화벽에서 9999 포트를 허용했는지
+- 로봇과 호스트 PC가 서로 ping 되는지
 
 ## 3. 명령 보내기: `cam_request()`
 
@@ -130,7 +182,7 @@ cam_request("GET PREDICTION", model, "1,3", nil, 0)
 | `01_ping.lua` | 연결, startup, 연속 PING (**실기 1단계**) |
 | `02_raw_command.lua` | `cam_request()` 직접 호출, 응답 파싱 |
 | `03_hand_eye_calibration_auto.lua` | 자동 hand-eye 캘리브레이션 (**실기 2단계**) |
-| `04_hand_eye_calibration_manual.lua` | 교시점 10개 수동 캘리브레이션 |
+| `04_hand_eye_calibration_manual.lua` | 교시점 20개 수동 캘리브레이션 (본사 권장 16개 이상) |
 | `05_calibration_verify.lua` | 검증 기준 저장(SAVE) / 오차 확인(VERIFY) |
 | `06_get_rig_pose.lua` | rig / 왼쪽 카메라 포즈 |
 | `07_camera_settings.lua` | 자동/수동 노출, 게인, HDR |
@@ -147,6 +199,7 @@ cam_request("GET PREDICTION", model, "1,3", nil, 0)
 | `18_multi_model.lua` | 모델 두 개 번갈아 사용 |
 | `19_robot_calibration_ik.lua` | 로봇 기구학 캘리브레이션 |
 | `20_pickandplace_noblend.lua` / `21_pickandplace_blend.lua` | 기존 화장품 pick & place 예제를 v5로 이식 |
+| `22_popup.lua` | popup 알림, 값 표시, 이동 전 작업자 확인, ERROR 자동 popup, `POPUP_ENABLE` 끄기 |
 
 예제의 `p1`, `p2` 등은 Fairino 교시점 이름입니다. 현장에서 저장한 이름으로 바꿔 쓰세요.
 
